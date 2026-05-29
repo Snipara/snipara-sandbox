@@ -57,6 +57,7 @@ docker_mount_workspace = true
 # docker_workspace_path = "."   # Optional override; defaults to the current directory
 docker_workspace_setup = "none" # "tests-only" or "dev" build a cached workspace image
 # docker_workspace_install_command = "python -m pip install -e \".[dev]\""
+# docker_workspace_install_extras = ["fastapi", "pydantic-settings"] # scoped deps on top of the setup mode
 docker_timeout = 30
 
 # Snipara Integration (optional — or use OAuth via snipara-mcp-login)
@@ -192,6 +193,7 @@ sandbox = SniparaSandbox(config=config)
 | `docker_workspace_path` | Path | `None` | Override the mounted host path (defaults to current directory) |
 | `docker_workspace_setup` | str | `"none"` | `none`, `package`, `tests-only`, or `dev` workspace image preparation mode |
 | `docker_workspace_install_command` | str | `None` | Explicit install command used when preparing a workspace image |
+| `docker_workspace_install_extras` | list[str] | `[]` | Extra pip requirements installed on top of the setup mode (e.g. what `conftest.py` imports) |
 | `docker_timeout` | int | `30` | Per-execution timeout |
 
 ### Prepared Workspace Images
@@ -216,6 +218,12 @@ runtime execution still uses a read-only mount and
 - Workspace-image build failures include the recent Docker build log lines to
   make dependency/setup errors easier to debug.
 - Use `docker_workspace_install_command` when your project needs a custom setup command.
+- Use `docker_workspace_install_extras` to add just the runtime dependencies your
+  test collection needs on top of any mode — for example, when a `tests-only`
+  build fails because `conftest.py` imports `fastapi` or `pydantic-settings` —
+  without resorting to a full `dev` install.
+- The runtime sets `PYTEST_ADDOPTS=-o cache_dir=/tmp/pytest-cache` (the `-o` ini
+  override form, since pytest 9 removed the `--cache-dir` CLI flag).
 
 ### Logging Settings
 

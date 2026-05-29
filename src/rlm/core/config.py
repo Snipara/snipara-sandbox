@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -121,6 +122,10 @@ class RLMConfig(BaseSettings):
     docker_workspace_install_command: str | None = Field(
         default=None, validation_alias=_sandbox_env("DOCKER_WORKSPACE_INSTALL_COMMAND")
     )
+    docker_workspace_install_extras: list[str] = Field(
+        default_factory=list,
+        validation_alias=_sandbox_env("DOCKER_WORKSPACE_INSTALL_EXTRAS"),
+    )
     docker_timeout: int = Field(default=30, validation_alias=_sandbox_env("DOCKER_TIMEOUT"))
 
     # Limits
@@ -194,6 +199,14 @@ class RLMConfig(BaseSettings):
             "RLM_MEMORY_ENABLED",
         ),
     )  # Enable Snipara memory tools.
+
+    @field_validator("docker_workspace_install_extras", mode="before")
+    @classmethod
+    def _split_install_extras(cls, value: object) -> object:
+        """Accept a comma/space-separated string for the install-extras env var."""
+        if isinstance(value, str):
+            return [token for token in re.split(r"[,\s]+", value.strip()) if token]
+        return value
 
     @property
     def snipara_enabled(self) -> bool:
@@ -351,6 +364,11 @@ def save_config(config: RLMConfig, config_path: Path) -> None:
             f"docker_workspace_install_command = {json.dumps(config.docker_workspace_install_command)}"
             if config.docker_workspace_install_command
             else '# docker_workspace_install_command = "python -m pip install -e \\".[dev]\\""'
+        ),
+        (
+            f"docker_workspace_install_extras = {json.dumps(config.docker_workspace_install_extras)}"
+            if config.docker_workspace_install_extras
+            else '# docker_workspace_install_extras = ["fastapi", "pydantic-settings"]'
         ),
         "",
         "# Security: File access restrictions",

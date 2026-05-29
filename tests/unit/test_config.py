@@ -66,6 +66,28 @@ class TestRLMConfig:
         assert config.docker_workspace_install_command == 'python -m pip install -e ".[dev]"'
         assert config.docker_timeout == 60
 
+    def test_docker_workspace_install_extras_default_empty(self):
+        """Should default the scoped install extras to an empty list."""
+        config = RLMConfig()
+
+        assert config.docker_workspace_install_extras == []
+
+    def test_docker_workspace_install_extras_accepts_list(self):
+        """Should accept an explicit list of pip requirement specifiers."""
+        config = RLMConfig(docker_workspace_install_extras=["fastapi", "pydantic-settings"])
+
+        assert config.docker_workspace_install_extras == ["fastapi", "pydantic-settings"]
+
+    def test_docker_workspace_install_extras_splits_string(self):
+        """Should split a comma/space-separated string (env-var form) into a list."""
+        config = RLMConfig(docker_workspace_install_extras="fastapi, pydantic-settings  redis")
+
+        assert config.docker_workspace_install_extras == [
+            "fastapi",
+            "pydantic-settings",
+            "redis",
+        ]
+
     def test_log_dir_default(self):
         """Should default log_dir to ./logs."""
         config = RLMConfig()

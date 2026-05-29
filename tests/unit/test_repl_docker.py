@@ -48,6 +48,46 @@ class TestWorkspaceImagePreparation:
 
         assert "Cannot infer" in str(exc_info.value)
 
+    def test_append_install_extras_adds_scoped_pip_install(self):
+        """Should append a scoped pip install so a conftest's deps can be pulled."""
+        from rlm.repl.docker import _append_install_extras
+
+        command = _append_install_extras(
+            "python -m pip install pytest pytest-asyncio",
+            ["fastapi", "pydantic-settings"],
+        )
+
+        assert command == (
+            "python -m pip install pytest pytest-asyncio && "
+            "python -m pip install fastapi pydantic-settings"
+        )
+
+    def test_append_install_extras_noop_without_extras(self):
+        """Should leave the command untouched when no extras are requested."""
+        from rlm.repl.docker import _append_install_extras
+
+        base = "python -m pip install pytest"
+        assert _append_install_extras(base, None) == base
+        assert _append_install_extras(base, []) == base
+
+    def test_append_install_extras_rejects_shell_metacharacters(self):
+        """Should reject extras that could break out of the RUN line."""
+        from rlm.repl.docker import _append_install_extras
+
+        with pytest.raises(ValueError) as exc_info:
+            _append_install_extras("python -m pip install pytest", ["fastapi; rm -rf /"])
+
+        assert "Invalid install extra" in str(exc_info.value)
+
+    def test_runtime_pytest_addopts_uses_ini_override(self):
+        """pytest 9 removed --cache-dir; the runtime must use the -o ini override."""
+        from rlm.repl.docker import DOCKER_RUNTIME_ENV, _workspace_image_dockerfile
+
+        assert DOCKER_RUNTIME_ENV["PYTEST_ADDOPTS"] == "-o cache_dir=/tmp/pytest-cache"
+        dockerfile = _workspace_image_dockerfile("python:3.11-slim", "python -m pip install pytest")
+        assert "--cache-dir=" not in dockerfile
+        assert "-o cache_dir=/tmp/pytest-cache" in dockerfile
+
     def test_build_context_tarfile_ignores_project_dockerignore_behavior(self, tmp_path: Path):
         """Should keep tests and README in the build context while dropping heavy noise."""
         from rlm.repl.docker import _build_context_tarfile

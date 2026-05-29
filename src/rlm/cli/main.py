@@ -100,6 +100,7 @@ def _config_show_payload(config: RLMConfig, config_file: Path) -> dict[str, obje
         ),
         "docker_workspace_setup": config.docker_workspace_setup,
         "docker_workspace_install_command": config.docker_workspace_install_command,
+        "docker_workspace_install_extras": list(config.docker_workspace_install_extras),
         "docker_timeout": config.docker_timeout,
         "max_depth": config.max_depth,
         "max_subcalls": config.max_subcalls,
@@ -155,8 +156,11 @@ def _config_show_rows(payload: dict[str, object]) -> list[tuple[str, str, str]]:
     def _workspace_setup_value() -> str:
         setup_mode = str(payload.get("docker_workspace_setup", "none"))
         install_command = payload.get("docker_workspace_install_command")
+        extras = payload.get("docker_workspace_install_extras") or []
         if install_command:
-            return f"{setup_mode} via custom install command"
+            setup_mode = f"{setup_mode} via custom install command"
+        if isinstance(extras, list) and extras:
+            setup_mode = f"{setup_mode} + extras [{', '.join(str(e) for e in extras)}]"
         return setup_mode
 
     return [
@@ -716,6 +720,9 @@ docker_mount_workspace = true
 # docker_workspace_path = "."
 docker_workspace_setup = "none"  # use "tests-only" or "dev" for repo-backed tests
 # docker_workspace_install_command = "python -m pip install -e \".[dev]\""
+# Scoped runtime deps to add on top of the setup mode (e.g. what conftest.py imports),
+# avoiding a full .[dev] install. Also settable via SNIPARA_SANDBOX_DOCKER_WORKSPACE_INSTALL_EXTRAS.
+# docker_workspace_install_extras = ["fastapi", "pydantic-settings"]
 """
 
     if not no_snipara:

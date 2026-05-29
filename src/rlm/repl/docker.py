@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import tarfile
 import tempfile
 import time
@@ -78,7 +79,8 @@ DOCKER_RUNTIME_ENV = {
     "HOME": "/tmp",
     "XDG_CACHE_HOME": "/tmp/.cache",
     "PYTHONPYCACHEPREFIX": "/tmp/pycache",
-    "PYTEST_ADDOPTS": "--cache-dir=/tmp/pytest-cache",
+    # Use the ini override form: pytest 9 removed the --cache-dir CLI flag.
+    "PYTEST_ADDOPTS": "-o cache_dir=/tmp/pytest-cache",
 }
 
 _WORKSPACE_METADATA_FILES = (
@@ -205,7 +207,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \\
     HOME=/tmp \\
     XDG_CACHE_HOME=/tmp/.cache \\
     PYTHONPYCACHEPREFIX=/tmp/pycache \\
-    PYTEST_ADDOPTS=--cache-dir=/tmp/pytest-cache
+    PYTEST_ADDOPTS="-o cache_dir=/tmp/pytest-cache"
 
 WORKDIR /workspace
 COPY . /workspace
@@ -308,12 +310,49 @@ def _runtime_environment(has_workdir_mount: bool) -> dict[str, str]:
     return env
 
 
+_INSTALL_EXTRA_RE = re.compile(r"^[A-Za-z0-9._\-\[\]<>=!~,+*]+$")
+
+
+def _append_install_extras(install_command: str, install_extras: list[str] | None) -> str:
+    """Append a scoped ``pip install`` for extra packages to the install command.
+
+    Lets a workspace pull just the runtime deps its test collection needs (e.g.
+    a ``conftest.py`` that imports ``fastapi``) without resorting to a full
+    ``.[dev]`` install. Each token is validated as a pip requirement specifier to
+    keep it out of shell-injection territory, since it is interpolated into the
+    image's ``RUN`` line.
+    """
+    if not install_extras:
+        return install_command
+
+    cleaned: list[str] = []
+    for extra in install_extras:
+        token = extra.strip()
+        if not token:
+            continue
+        if not _INSTALL_EXTRA_RE.match(token):
+            raise ValueError(
+                f"Invalid install extra {extra!r}: only pip requirement specifiers "
+                "(letters, digits, and . _ - [ ] < > = ! ~ , + *) are allowed."
+            )
+        cleaned.append(token)
+
+    if not cleaned:
+        return install_command
+
+    extras_command = "python -m pip install " + " ".join(cleaned)
+    if not install_command.strip():
+        return extras_command
+    return f"{install_command} && {extras_command}"
+
+
 def build_workspace_image(
     *,
     base_image: str,
     workspace_path: Path,
     setup_mode: str,
     install_command: str | None = None,
+    install_extras: list[str] | None = None,
 ) -> str:
     """Build or reuse a cached Docker image with workspace dependencies installed."""
     if not DOCKER_AVAILABLE:
@@ -329,6 +368,7 @@ def build_workspace_image(
     resolved_command = install_command or _default_workspace_install_command(
         workspace_path, setup_mode
     )
+    resolved_command = _append_install_extras(resolved_command, install_extras)
     tag = _workspace_image_tag(base_image, workspace_path, resolved_command)
 
     client = docker.from_env()  # type: ignore[attr-defined]

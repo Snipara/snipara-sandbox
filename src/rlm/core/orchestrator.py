@@ -210,6 +210,7 @@ class RLM:
             workspace_path=workspace_path,
             setup_mode=setup_mode,
             install_command=self.config.docker_workspace_install_command,
+            install_extras=self.config.docker_workspace_install_extras,
         )
 
     def _register_builtin_tools(self) -> None:

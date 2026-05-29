@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## [2.2.5] - 2026-05-29
+
+### Added
+
+- `docker_workspace_install_extras`: a scoped list of pip requirements installed
+  on top of any setup mode, so a workspace can pull just the runtime deps its
+  test collection needs (e.g. a `conftest.py` that imports `fastapi` or
+  `pydantic-settings`) without a full `.[dev]` install. Settable via config,
+  direct instantiation, or the `SNIPARA_SANDBOX_DOCKER_WORKSPACE_INSTALL_EXTRAS`
+  env var (comma/space-separated). Extras are validated as pip requirement
+  specifiers to keep them out of the image's `RUN` line.
+
+### Fixed
+
+- Workspace-image builds no longer set the removed `--cache-dir` pytest CLI flag.
+  `PYTEST_ADDOPTS` now uses the portable `-o cache_dir=/tmp/pytest-cache` ini
+  override, which works on both pytest 8 and pytest 9 (pytest 9 dropped
+  `--cache-dir`).
+
+### Validated
+
+- End-to-end: a `tests-only` image plus `docker_workspace_install_extras` runs a
+  real repo test suite to green inside the isolated container (sandbox-owned
+  context ships `tests/` + `README.md`, `PYTHONPATH=/workspace` resolves imports,
+  scoped extras satisfy the conftest).
+
 ## [2.2.4] - 2026-05-29
 
 ### Fixed

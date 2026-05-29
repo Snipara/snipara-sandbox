@@ -94,6 +94,10 @@ def _config_show_payload(config: RLMConfig, config_file: Path) -> dict[str, obje
         "docker_cpus": config.docker_cpus,
         "docker_memory": config.docker_memory,
         "docker_network_disabled": config.docker_network_disabled,
+        "docker_mount_workspace": config.docker_mount_workspace,
+        "docker_workspace_path": (
+            str(config.docker_workspace_path) if config.docker_workspace_path else None
+        ),
         "docker_timeout": config.docker_timeout,
         "max_depth": config.max_depth,
         "max_subcalls": config.max_subcalls,
@@ -134,7 +138,17 @@ def _config_show_rows(payload: dict[str, object]) -> list[tuple[str, str, str]]:
         items = payload.get(key, [])
         if isinstance(items, list) and items:
             return ", ".join(str(item) for item in items)
+        if key == "allowed_paths":
+            return "current working directory only"
         return "[]"
+
+    def _workspace_mount_value() -> str:
+        if not bool(payload.get("docker_mount_workspace", False)):
+            return "disabled"
+        configured_path = payload.get("docker_workspace_path")
+        if configured_path:
+            return f"{configured_path} (read-only)"
+        return "current working directory (read-only)"
 
     return [
         ("Source", "Config file", _path_status("config_file_exists", "config_file")),
@@ -155,6 +169,11 @@ def _config_show_rows(payload: dict[str, object]) -> list[tuple[str, str, str]]:
             "Docker",
             "Network disabled",
             _status(bool(payload.get("docker_network_disabled", False))),
+        ),
+        (
+            "Docker",
+            "Workspace mount",
+            _workspace_mount_value(),
         ),
         ("Limits", "Max depth", str(payload.get("max_depth", ""))),
         ("Limits", "Max subcalls", str(payload.get("max_subcalls", ""))),
@@ -674,6 +693,9 @@ verbose = false
 docker_image = "python:3.11-slim"
 docker_cpus = 1.0
 docker_memory = "512m"
+docker_network_disabled = true
+docker_mount_workspace = true
+# docker_workspace_path = "."
 """
 
     if not no_snipara:

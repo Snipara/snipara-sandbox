@@ -1,5 +1,6 @@
 """Tests for RLM Orchestrator."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -112,6 +113,16 @@ class TestCreateREPL:
         from rlm.repl.local import LocalREPL
 
         assert isinstance(rlm.repl, LocalREPL)
+
+    @patch("rlm.logging.trajectory.TrajectoryLogger")
+    def test_localdev_repl_when_trust_level_local(self, mock_logger):
+        """Should create unrestricted local REPL when explicitly trusted."""
+        config = RLMConfig(trust_level="local")
+        rlm = RLM(environment="local", config=config)
+
+        from rlm.repl.localdev import LocalDevREPL
+
+        assert isinstance(rlm.repl, LocalDevREPL)
 
     @patch("rlm.logging.trajectory.TrajectoryLogger")
     def test_unknown_environment_raises(self, mock_logger):
@@ -352,6 +363,30 @@ class TestSniparaIntegration:
 
 class TestCreateREPLEnvironments:
     """Tests for different REPL environment creation."""
+
+    @patch("rlm.logging.trajectory.TrajectoryLogger")
+    @patch("rlm.repl.docker.DockerREPL")
+    def test_docker_repl_mounts_cwd_by_default(self, mock_docker_repl, mock_logger):
+        """Should expose the current workspace to Docker by default."""
+        config = RLMConfig(environment="docker")
+
+        rlm = RLM(environment="docker", config=config)
+
+        assert rlm.repl is mock_docker_repl.return_value
+        call_kwargs = mock_docker_repl.call_args.kwargs
+        assert call_kwargs["workdir_mount"] == Path.cwd().resolve()
+
+    @patch("rlm.logging.trajectory.TrajectoryLogger")
+    @patch("rlm.repl.docker.DockerREPL")
+    def test_docker_repl_can_disable_workspace_mount(self, mock_docker_repl, mock_logger):
+        """Should allow a fully blind Docker container when explicitly requested."""
+        config = RLMConfig(environment="docker", docker_mount_workspace=False)
+
+        rlm = RLM(environment="docker", config=config)
+
+        assert rlm.repl is mock_docker_repl.return_value
+        call_kwargs = mock_docker_repl.call_args.kwargs
+        assert call_kwargs["workdir_mount"] is None
 
     @patch("rlm.logging.trajectory.TrajectoryLogger")
     def test_docker_repl_import_error(self, mock_logger):

@@ -49,6 +49,8 @@ class TestRLMConfig:
             docker_cpus=2.0,
             docker_memory="1g",
             docker_network_disabled=False,
+            docker_mount_workspace=False,
+            docker_workspace_path=Path("/tmp/project"),
             docker_timeout=60,
         )
 
@@ -56,6 +58,8 @@ class TestRLMConfig:
         assert config.docker_cpus == 2.0
         assert config.docker_memory == "1g"
         assert config.docker_network_disabled is False
+        assert config.docker_mount_workspace is False
+        assert config.docker_workspace_path == Path("/tmp/project")
         assert config.docker_timeout == 60
 
     def test_log_dir_default(self):
@@ -262,6 +266,8 @@ class TestSaveConfig:
             docker_image="python:3.12",
             docker_cpus=2.0,
             docker_memory="1g",
+            docker_mount_workspace=False,
+            docker_workspace_path=Path("/tmp/project"),
         )
         config_path = tmp_path / "rlm.toml"
 
@@ -271,6 +277,8 @@ class TestSaveConfig:
         assert 'docker_image = "python:3.12"' in content
         assert "docker_cpus = 2.0" in content
         assert 'docker_memory = "1g"' in content
+        assert "docker_mount_workspace = false" in content
+        assert 'docker_workspace_path = "/tmp/project"' in content
 
     def test_saves_snipara_credentials(self, tmp_path, monkeypatch):
         """Should save Snipara credentials when set."""
@@ -354,12 +362,16 @@ class TestEnvironmentVariables:
         monkeypatch.setenv("SNIPARA_SANDBOX_DOCKER_IMAGE", "python:3.10")
         monkeypatch.setenv("SNIPARA_SANDBOX_DOCKER_CPUS", "0.5")
         monkeypatch.setenv("SNIPARA_SANDBOX_DOCKER_MEMORY", "256m")
+        monkeypatch.setenv("SNIPARA_SANDBOX_DOCKER_MOUNT_WORKSPACE", "false")
+        monkeypatch.setenv("SNIPARA_SANDBOX_DOCKER_WORKSPACE_PATH", "/workspace/project")
 
         config = RLMConfig()
 
         assert config.docker_image == "python:3.10"
         assert config.docker_cpus == 0.5
         assert config.docker_memory == "256m"
+        assert config.docker_mount_workspace is False
+        assert config.docker_workspace_path == Path("/workspace/project")
 
     def test_snipara_env_alias(self, monkeypatch):
         """Should support SNIPARA_* env var aliases."""

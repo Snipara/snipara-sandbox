@@ -258,6 +258,8 @@ class SniparaSandboxConfig(BaseSettings):
     docker_cpus: float = 1.0
     docker_memory: str = "512m"
     docker_network_disabled: bool = True
+    docker_mount_workspace: bool = True
+    docker_workspace_path: Path | None = None
     docker_timeout: int = 30
 
     # Limits

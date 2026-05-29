@@ -53,6 +53,8 @@ docker_image = "python:3.11-slim"
 docker_cpus = 1.0
 docker_memory = "512m"
 docker_network_disabled = true
+docker_mount_workspace = true
+# docker_workspace_path = "."   # Optional override; defaults to the current directory
 docker_timeout = 30
 
 # Snipara Integration (optional — or use OAuth via snipara-mcp-login)
@@ -92,6 +94,8 @@ export SNIPARA_SANDBOX_DOCKER_IMAGE=python:3.11-slim
 export SNIPARA_SANDBOX_DOCKER_CPUS=1.0
 export SNIPARA_SANDBOX_DOCKER_MEMORY=512m
 export SNIPARA_SANDBOX_DOCKER_NETWORK_DISABLED=true
+export SNIPARA_SANDBOX_DOCKER_MOUNT_WORKSPACE=true
+export SNIPARA_SANDBOX_DOCKER_WORKSPACE_PATH=.
 export SNIPARA_SANDBOX_DOCKER_TIMEOUT=30
 
 # Snipara service integration
@@ -180,6 +184,8 @@ sandbox = SniparaSandbox(config=config)
 | `docker_cpus` | float | `1.0` | CPU limit |
 | `docker_memory` | str | `"512m"` | Memory limit |
 | `docker_network_disabled` | bool | `true` | Disable network access |
+| `docker_mount_workspace` | bool | `true` | Mount the workspace read-only at `/workspace` |
+| `docker_workspace_path` | Path | `None` | Override the mounted host path (defaults to current directory) |
 | `docker_timeout` | int | `30` | Per-execution timeout |
 
 ### Logging Settings

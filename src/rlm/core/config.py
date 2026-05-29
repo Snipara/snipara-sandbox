@@ -108,6 +108,12 @@ class RLMConfig(BaseSettings):
     docker_network_disabled: bool = Field(
         default=True, validation_alias=_sandbox_env("DOCKER_NETWORK_DISABLED")
     )
+    docker_mount_workspace: bool = Field(
+        default=True, validation_alias=_sandbox_env("DOCKER_MOUNT_WORKSPACE")
+    )
+    docker_workspace_path: Path | None = Field(
+        default=None, validation_alias=_sandbox_env("DOCKER_WORKSPACE_PATH")
+    )
     docker_timeout: int = Field(default=30, validation_alias=_sandbox_env("DOCKER_TIMEOUT"))
 
     # Limits
@@ -326,6 +332,13 @@ def save_config(config: RLMConfig, config_path: Path) -> None:
         f'docker_image = "{config.docker_image}"',
         f"docker_cpus = {config.docker_cpus}",
         f'docker_memory = "{config.docker_memory}"',
+        f"docker_network_disabled = {str(config.docker_network_disabled).lower()}",
+        f"docker_mount_workspace = {str(config.docker_mount_workspace).lower()}",
+        (
+            f'docker_workspace_path = "{config.docker_workspace_path}"'
+            if config.docker_workspace_path
+            else '# docker_workspace_path = "."'
+        ),
         "",
         "# Security: File access restrictions",
         "# Paths that file tools can access. Empty list means current directory only.",

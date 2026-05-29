@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
@@ -149,8 +150,11 @@ class RLM:
     def _create_repl(self, environment: str) -> BaseREPL:
         """Create REPL from string identifier."""
         from rlm.repl.local import LocalREPL
+        from rlm.repl.localdev import LocalDevREPL
 
         if environment == "local":
+            if self.config.trust_level == "local":
+                return LocalDevREPL(timeout=self.config.docker_timeout, audit_log=True)
             return LocalREPL(timeout=self.config.docker_timeout)
 
         if environment == "docker":
@@ -163,6 +167,7 @@ class RLM:
                     memory=self.config.docker_memory,
                     timeout=self.config.docker_timeout,
                     network_disabled=self.config.docker_network_disabled,
+                    workdir_mount=self._resolve_docker_workdir_mount(),
                 )
             except ImportError:
                 raise ImportError(
@@ -182,6 +187,14 @@ class RLM:
                 ) from None
 
         raise ValueError(f"Unknown environment: {environment}. Supported: local, docker, wasm")
+
+    def _resolve_docker_workdir_mount(self) -> Path | None:
+        """Resolve the host workspace path exposed read-only to Docker executions."""
+        if not self.config.docker_mount_workspace:
+            return None
+
+        mount_path = self.config.docker_workspace_path or Path.cwd()
+        return mount_path.resolve()
 
     def _register_builtin_tools(self) -> None:
         """Register builtin tools."""

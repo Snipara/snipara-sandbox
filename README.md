@@ -281,6 +281,9 @@ verbose = false
 docker_image = "python:3.11-slim"
 docker_cpus = 1.0
 docker_memory = "512m"
+docker_network_disabled = true
+docker_mount_workspace = true
+# docker_workspace_path = "."
 
 snipara_project_slug = "your-project"
 ```
@@ -302,6 +305,9 @@ export SNIPARA_PROJECT_SLUG=my-project
 | `wasm` | Portable sandboxing | WebAssembly runtime |
 
 Docker mode is recommended for production and untrusted execution.
+By default it mounts the current workspace read-only at `/workspace`, so the
+runtime can inspect and test the repo while keeping process isolation and
+network disabled.
 
 ```bash
 snipara-sandbox run --env docker "Validate this user-submitted transformation"

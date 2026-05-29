@@ -73,6 +73,48 @@ class TestConfigCommand:
         assert data["model"] == "json-model"
         assert data["snipara_enabled"] is True
 
+    @patch("rlm.core.config.load_project_env", return_value=None)
+    @patch("rlm.core.config.load_config")
+    def test_empty_allowed_paths_show_cwd_fallback(
+        self, mock_load_config, _mock_load_project_env, tmp_path
+    ):
+        """Should explain the empty allowed-paths fallback in human output."""
+        from rlm.core.config import RLMConfig
+
+        mock_load_config.return_value = RLMConfig.model_construct(
+            model="test-model",
+            allowed_paths=[],
+        )
+
+        result = runner.invoke(
+            app, ["config", "show", "--config", str(tmp_path / "snipara-sandbox.toml")]
+        )
+
+        assert result.exit_code == 0
+        assert "current working directory only" in result.stdout
+
+    @patch("rlm.core.config.load_project_env", return_value=None)
+    @patch("rlm.core.config.load_config")
+    def test_workspace_mount_shown_for_default_docker_behavior(
+        self, mock_load_config, _mock_load_project_env, tmp_path
+    ):
+        """Should show the default read-only workspace mount in human output."""
+        from rlm.core.config import RLMConfig
+
+        mock_load_config.return_value = RLMConfig.model_construct(
+            model="test-model",
+            environment="docker",
+            docker_mount_workspace=True,
+            docker_workspace_path=None,
+        )
+
+        result = runner.invoke(
+            app, ["config", "show", "--config", str(tmp_path / "snipara-sandbox.toml")]
+        )
+
+        assert result.exit_code == 0
+        assert "current working directory (read-only)" in result.stdout
+
     def test_root_version_flag(self):
         """Should support the root --version flag."""
         result = runner.invoke(app, ["--version"])

@@ -324,6 +324,32 @@ class TestDockerREPLExecution:
         call_kwargs = mock_client.containers.run.call_args.kwargs
         volumes = call_kwargs.get("volumes", {})
         assert str(tmp_path) in volumes
+        assert call_kwargs["working_dir"] == "/workspace"
+        assert call_kwargs["environment"]["PYTHONDONTWRITEBYTECODE"] == "1"
+
+    @pytest.mark.asyncio
+    @patch("rlm.repl.docker.DOCKER_AVAILABLE", True)
+    @patch("rlm.repl.docker.docker")
+    async def test_execute_with_missing_workdir_mount_falls_back_to_code(
+        self, mock_docker, tmp_path
+    ):
+        """Should fall back to /code when the configured mount path is missing."""
+        from rlm.repl.docker import DockerREPL
+
+        missing_path = tmp_path / "missing-workspace"
+
+        mock_client = MagicMock()
+        mock_docker.from_env.return_value = mock_client
+        mock_client.images.get.return_value = MagicMock()
+        mock_client.containers.run.return_value = b"output"
+
+        repl = DockerREPL(workdir_mount=missing_path)
+        await repl.execute("print('test')")
+
+        call_kwargs = mock_client.containers.run.call_args.kwargs
+        volumes = call_kwargs.get("volumes", {})
+        assert str(missing_path) not in volumes
+        assert call_kwargs["working_dir"] == "/code"
 
 
 class TestDockerREPLResourceLimits:

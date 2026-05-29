@@ -239,10 +239,11 @@ print(f"__RLM_METRICS__:{{_cpu_ms}}:{{_mem_bytes}}")
 
         try:
             # Build volumes
+            has_workdir_mount = self.workdir_mount is not None and self.workdir_mount.exists()
             volumes: dict[str, dict[str, str]] = {
                 str(script_path): {"bind": "/code/script.py", "mode": "ro"},
             }
-            if self.workdir_mount and self.workdir_mount.exists():
+            if has_workdir_mount and self.workdir_mount is not None:
                 volumes[str(self.workdir_mount)] = {"bind": "/workspace", "mode": "ro"}
 
             # Run container
@@ -255,8 +256,9 @@ print(f"__RLM_METRICS__:{{_cpu_ms}}:{{_mem_bytes}}")
                         self.image,
                         command=["python", "/code/script.py"],
                         volumes=volumes,
-                        working_dir="/workspace" if self.workdir_mount else "/code",
+                        working_dir="/workspace" if has_workdir_mount else "/code",
                         network_disabled=self.network_disabled,
+                        environment={"PYTHONDONTWRITEBYTECODE": "1"},
                         mem_limit=self.memory,
                         cpu_quota=int(self.cpus * 100000),
                         cpu_period=100000,

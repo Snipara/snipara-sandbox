@@ -115,6 +115,28 @@ class TestConfigCommand:
         assert result.exit_code == 0
         assert "current working directory (read-only)" in result.stdout
 
+    @patch("rlm.core.config.load_project_env", return_value=None)
+    @patch("rlm.core.config.load_config")
+    def test_workspace_setup_shown_for_prepared_docker_behavior(
+        self, mock_load_config, _mock_load_project_env, tmp_path
+    ):
+        """Should show prepared workspace setup mode in human output."""
+        from rlm.core.config import RLMConfig
+
+        mock_load_config.return_value = RLMConfig.model_construct(
+            model="test-model",
+            environment="docker",
+            docker_workspace_setup="dev",
+            docker_workspace_install_command='python -m pip install -e ".[dev]"',
+        )
+
+        result = runner.invoke(
+            app, ["config", "show", "--config", str(tmp_path / "snipara-sandbox.toml")]
+        )
+
+        assert result.exit_code == 0
+        assert "dev via custom install command" in result.stdout
+
     def test_root_version_flag(self):
         """Should support the root --version flag."""
         result = runner.invoke(app, ["--version"])

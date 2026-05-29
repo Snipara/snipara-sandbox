@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## [2.2.2] - 2026-05-29
+
+### Changed
+
+- Added `docker_workspace_setup` and `docker_workspace_install_command` so Docker mode can prepare a cached workspace image with project dependencies for isolated repo-backed test runs.
+- Updated the Docker runtime, CLI, docs, and tests to support prepared workspace images while keeping runtime execution on a read-only mount with network disabled.
+
 ## [2.2.1] - 2026-05-29
 
 ### Fixed
@@ -14,6 +21,7 @@ All notable changes to this project are documented in this file.
 ### Changed
 
 - Docker executions now mount the current workspace read-only at `/workspace` by default, with `docker_mount_workspace` and `docker_workspace_path` available to disable or override that behavior.
+- Added `docker_workspace_setup` and `docker_workspace_install_command` so Docker mode can prepare a cached workspace image with project dependencies for isolated repo-backed test runs.
 - Updated Docker runtime, CLI, docs, and tests to reflect the repo-visible isolated execution model.
 
 ## [2.2.0] - 2026-05-11

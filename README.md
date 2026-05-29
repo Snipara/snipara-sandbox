@@ -133,7 +133,7 @@ pip install snipara-sandbox[snipara]
 pip install snipara-sandbox[all]
 ```
 
-Package version in this repo: `2.2.1`
+Package version in this repo: `2.2.2`
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
@@ -284,6 +284,8 @@ docker_memory = "512m"
 docker_network_disabled = true
 docker_mount_workspace = true
 # docker_workspace_path = "."
+docker_workspace_setup = "none"  # set to "dev" to preinstall workspace test deps
+# docker_workspace_install_command = "python -m pip install -e \".[dev]\""
 
 snipara_project_slug = "your-project"
 ```
@@ -308,6 +310,20 @@ Docker mode is recommended for production and untrusted execution.
 By default it mounts the current workspace read-only at `/workspace`, so the
 runtime can inspect and test the repo while keeping process isolation and
 network disabled.
+
+For actual repo-backed test runs, enable workspace setup:
+
+```toml
+[snipara_sandbox]
+environment = "docker"
+docker_mount_workspace = true
+docker_workspace_setup = "dev"
+```
+
+That prepares a cached local Docker image from the current workspace and
+installs its dependencies at image-build time. Runtime execution still uses a
+read-only mount and no network. If your project does not use `.[dev]`, set
+`docker_workspace_install_command` explicitly.
 
 ```bash
 snipara-sandbox run --env docker "Validate this user-submitted transformation"

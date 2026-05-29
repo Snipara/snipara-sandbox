@@ -1,9 +1,109 @@
 """Tests for Docker REPL sandbox."""
 
 import asyncio
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+class TestWorkspaceImagePreparation:
+    """Tests for prepared workspace Docker images."""
+
+    def test_default_workspace_install_command_dev_pyproject(self, tmp_path: Path):
+        """Should use editable dev install for standard Python projects."""
+        from rlm.repl.docker import _default_workspace_install_command
+
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n")
+
+        command = _default_workspace_install_command(tmp_path, "dev")
+
+        assert command == 'python -m pip install -e ".[dev]"'
+
+    def test_default_workspace_install_command_package_requirements(self, tmp_path: Path):
+        """Should fall back to requirements for non-package workspaces."""
+        from rlm.repl.docker import _default_workspace_install_command
+
+        (tmp_path / "requirements.txt").write_text("pytest\n")
+
+        command = _default_workspace_install_command(tmp_path, "package")
+
+        assert command == "python -m pip install -r requirements.txt"
+
+    def test_workspace_install_command_requires_project_metadata(self, tmp_path: Path):
+        """Should fail clearly when workspace install mode cannot be inferred."""
+        from rlm.repl.docker import _default_workspace_install_command
+
+        with pytest.raises(ValueError) as exc_info:
+            _default_workspace_install_command(tmp_path, "dev")
+
+        assert "Cannot infer" in str(exc_info.value)
+
+    @patch("rlm.repl.docker.DOCKER_AVAILABLE", True)
+    @patch("rlm.repl.docker.docker")
+    def test_build_workspace_image_reuses_existing_tag(self, mock_docker, tmp_path: Path):
+        """Should reuse cached workspace images when the tag already exists."""
+        from rlm.repl.docker import build_workspace_image
+
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n")
+
+        mock_client = MagicMock()
+        mock_docker.from_env.return_value = mock_client
+        mock_client.images.get.return_value = MagicMock()
+
+        tag = build_workspace_image(
+            base_image="python:3.11-slim",
+            workspace_path=tmp_path,
+            setup_mode="dev",
+        )
+
+        assert tag.startswith("snipara-sandbox-workspace:")
+        mock_client.images.build.assert_not_called()
+
+    @patch("rlm.repl.docker.DOCKER_AVAILABLE", True)
+    @patch("rlm.repl.docker.docker")
+    def test_build_workspace_image_builds_missing_tag(self, mock_docker, tmp_path: Path):
+        """Should build a workspace image when the cached tag is missing."""
+        from rlm.repl.docker import ImageNotFound, build_workspace_image
+
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n")
+
+        mock_client = MagicMock()
+        mock_docker.from_env.return_value = mock_client
+        mock_client.images.get.side_effect = ImageNotFound("missing")
+
+        tag = build_workspace_image(
+            base_image="python:3.11-slim",
+            workspace_path=tmp_path,
+            setup_mode="dev",
+        )
+
+        assert tag.startswith("snipara-sandbox-workspace:")
+        build_kwargs = mock_client.images.build.call_args.kwargs
+        assert build_kwargs["path"] == str(tmp_path.resolve())
+        assert build_kwargs["tag"] == tag
+        assert "Dockerfile" in build_kwargs["dockerfile"]
+
+    def test_workspace_image_tag_changes_with_dependency_metadata(self, tmp_path: Path):
+        """Should invalidate prepared images when dependency metadata changes."""
+        from rlm.repl.docker import _workspace_image_tag
+
+        lockfile = tmp_path / "uv.lock"
+        lockfile.write_text("version = 1\n")
+        tag_before = _workspace_image_tag(
+            "python:3.11-slim",
+            tmp_path,
+            'python -m pip install -e ".[dev]"',
+        )
+
+        lockfile.write_text("version = 2\n")
+        tag_after = _workspace_image_tag(
+            "python:3.11-slim",
+            tmp_path,
+            'python -m pip install -e ".[dev]"',
+        )
+
+        assert tag_before != tag_after
 
 
 class TestDockerREPLInit:

@@ -162,7 +162,7 @@ class RLM:
                 from rlm.repl.docker import DockerREPL
 
                 return DockerREPL(
-                    image=self.config.docker_image,
+                    image=self._resolve_docker_image(),
                     cpus=self.config.docker_cpus,
                     memory=self.config.docker_memory,
                     timeout=self.config.docker_timeout,
@@ -195,6 +195,22 @@ class RLM:
 
         mount_path = self.config.docker_workspace_path or Path.cwd()
         return mount_path.resolve()
+
+    def _resolve_docker_image(self) -> str:
+        """Resolve the Docker image, optionally preparing a workspace-specific one."""
+        setup_mode = self.config.docker_workspace_setup
+        if setup_mode == "none":
+            return self.config.docker_image
+
+        from rlm.repl.docker import build_workspace_image
+
+        workspace_path = self.config.docker_workspace_path or Path.cwd()
+        return build_workspace_image(
+            base_image=self.config.docker_image,
+            workspace_path=workspace_path,
+            setup_mode=setup_mode,
+            install_command=self.config.docker_workspace_install_command,
+        )
 
     def _register_builtin_tools(self) -> None:
         """Register builtin tools."""

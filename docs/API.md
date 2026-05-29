@@ -260,6 +260,8 @@ class SniparaSandboxConfig(BaseSettings):
     docker_network_disabled: bool = True
     docker_mount_workspace: bool = True
     docker_workspace_path: Path | None = None
+    docker_workspace_setup: str = "none"
+    docker_workspace_install_command: str | None = None
     docker_timeout: int = 30
 
     # Limits
@@ -557,6 +559,10 @@ Show version information.
 | `SNIPARA_SANDBOX_LLM_API_KEY` | LLM backend API key | None |
 | `SNIPARA_SANDBOX_ENVIRONMENT` | Execution env | `local` |
 | `SNIPARA_SANDBOX_DOCKER_IMAGE` | Docker image | `python:3.11-slim` |
+| `SNIPARA_SANDBOX_DOCKER_MOUNT_WORKSPACE` | Read-only workspace mount toggle | `true` |
+| `SNIPARA_SANDBOX_DOCKER_WORKSPACE_PATH` | Mounted workspace path override | None |
+| `SNIPARA_SANDBOX_DOCKER_WORKSPACE_SETUP` | Prepared workspace image mode | `none` |
+| `SNIPARA_SANDBOX_DOCKER_WORKSPACE_INSTALL_COMMAND` | Custom workspace install command | None |
 | `SNIPARA_SANDBOX_MAX_DEPTH` | Max depth | `4` |
 | `SNIPARA_SANDBOX_TOKEN_BUDGET` | Token budget | `8000` |
 | `SNIPARA_SANDBOX_VERBOSE` | Verbose logging | `false` |

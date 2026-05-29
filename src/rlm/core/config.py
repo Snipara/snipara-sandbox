@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 from dataclasses import dataclass
@@ -113,6 +114,12 @@ class RLMConfig(BaseSettings):
     )
     docker_workspace_path: Path | None = Field(
         default=None, validation_alias=_sandbox_env("DOCKER_WORKSPACE_PATH")
+    )
+    docker_workspace_setup: str = Field(
+        default="none", validation_alias=_sandbox_env("DOCKER_WORKSPACE_SETUP")
+    )
+    docker_workspace_install_command: str | None = Field(
+        default=None, validation_alias=_sandbox_env("DOCKER_WORKSPACE_INSTALL_COMMAND")
     )
     docker_timeout: int = Field(default=30, validation_alias=_sandbox_env("DOCKER_TIMEOUT"))
 
@@ -338,6 +345,12 @@ def save_config(config: RLMConfig, config_path: Path) -> None:
             f'docker_workspace_path = "{config.docker_workspace_path}"'
             if config.docker_workspace_path
             else '# docker_workspace_path = "."'
+        ),
+        f'docker_workspace_setup = "{config.docker_workspace_setup}"',
+        (
+            f"docker_workspace_install_command = {json.dumps(config.docker_workspace_install_command)}"
+            if config.docker_workspace_install_command
+            else '# docker_workspace_install_command = "python -m pip install -e \\".[dev]\\""'
         ),
         "",
         "# Security: File access restrictions",

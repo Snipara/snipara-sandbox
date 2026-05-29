@@ -98,6 +98,8 @@ def _config_show_payload(config: RLMConfig, config_file: Path) -> dict[str, obje
         "docker_workspace_path": (
             str(config.docker_workspace_path) if config.docker_workspace_path else None
         ),
+        "docker_workspace_setup": config.docker_workspace_setup,
+        "docker_workspace_install_command": config.docker_workspace_install_command,
         "docker_timeout": config.docker_timeout,
         "max_depth": config.max_depth,
         "max_subcalls": config.max_subcalls,
@@ -150,6 +152,13 @@ def _config_show_rows(payload: dict[str, object]) -> list[tuple[str, str, str]]:
             return f"{configured_path} (read-only)"
         return "current working directory (read-only)"
 
+    def _workspace_setup_value() -> str:
+        setup_mode = str(payload.get("docker_workspace_setup", "none"))
+        install_command = payload.get("docker_workspace_install_command")
+        if install_command:
+            return f"{setup_mode} via custom install command"
+        return setup_mode
+
     return [
         ("Source", "Config file", _path_status("config_file_exists", "config_file")),
         (
@@ -174,6 +183,11 @@ def _config_show_rows(payload: dict[str, object]) -> list[tuple[str, str, str]]:
             "Docker",
             "Workspace mount",
             _workspace_mount_value(),
+        ),
+        (
+            "Docker",
+            "Workspace setup",
+            _workspace_setup_value(),
         ),
         ("Limits", "Max depth", str(payload.get("max_depth", ""))),
         ("Limits", "Max subcalls", str(payload.get("max_subcalls", ""))),
@@ -429,6 +443,8 @@ def run(
             console.print(f"  Max Depth: {effective_max_depth}")
             console.print(f"  Token Budget: {effective_token_budget}")
             console.print(f"  Timeout: {effective_timeout}s")
+            if effective_environment == "docker":
+                console.print(f"  Docker workspace setup: {config.docker_workspace_setup}")
             console.print(f"  Sub-calls: {config.sub_calls_enabled}")
             if config.snipara_project_slug:
                 console.print(f"  Snipara Project: {config.snipara_project_slug}")
@@ -559,6 +575,8 @@ def agent(
             console.print(f"  Cost Limit: ${cost_limit}")
             console.print(f"  Timeout: {effective_timeout}s")
             console.print(f"  Max Iterations: {max_iterations}")
+            if effective_environment == "docker":
+                console.print(f"  Docker workspace setup: {config.docker_workspace_setup}")
             if config.snipara_project_slug:
                 console.print(f"  Snipara Project: {config.snipara_project_slug}")
             console.print()
@@ -696,6 +714,8 @@ docker_memory = "512m"
 docker_network_disabled = true
 docker_mount_workspace = true
 # docker_workspace_path = "."
+docker_workspace_setup = "none"  # set to "dev" to preinstall project test deps
+# docker_workspace_install_command = "python -m pip install -e \".[dev]\""
 """
 
     if not no_snipara:

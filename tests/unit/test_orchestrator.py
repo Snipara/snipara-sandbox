@@ -377,6 +377,23 @@ class TestCreateREPLEnvironments:
         assert call_kwargs["workdir_mount"] == Path.cwd().resolve()
 
     @patch("rlm.logging.trajectory.TrajectoryLogger")
+    @patch("rlm.repl.docker.build_workspace_image")
+    @patch("rlm.repl.docker.DockerREPL")
+    def test_docker_repl_can_prepare_workspace_image(
+        self, mock_docker_repl, mock_build_workspace_image, mock_logger
+    ):
+        """Should replace the base image with a prepared workspace image when requested."""
+        config = RLMConfig(environment="docker", docker_workspace_setup="dev")
+        mock_build_workspace_image.return_value = "snipara-sandbox-workspace:test1234"
+
+        rlm = RLM(environment="docker", config=config)
+
+        assert rlm.repl is mock_docker_repl.return_value
+        mock_build_workspace_image.assert_called_once()
+        call_kwargs = mock_docker_repl.call_args.kwargs
+        assert call_kwargs["image"] == "snipara-sandbox-workspace:test1234"
+
+    @patch("rlm.logging.trajectory.TrajectoryLogger")
     @patch("rlm.repl.docker.DockerREPL")
     def test_docker_repl_can_disable_workspace_mount(self, mock_docker_repl, mock_logger):
         """Should allow a fully blind Docker container when explicitly requested."""

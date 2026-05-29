@@ -178,6 +178,7 @@ sandbox = SniparaSandbox(tools=[tool])
 - **Network disabled** - `--network none` by default
 - **Resource limits** - CPU and memory caps
 - **Read-only mounts** - Workspace mounted as read-only
+- **Prepared workspace images** - Optional cached image build installs repo deps before isolated execution
 - **Non-root user** - Runs as unprivileged user
 
 ## Trajectory Logging

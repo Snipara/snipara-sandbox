@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import tempfile
 from pathlib import Path
@@ -45,6 +46,182 @@ except ImportError:
 from rlm.core.types import REPLResult
 from rlm.repl.base import BaseREPL
 from rlm.repl.safety import MAX_EXECUTION_TIME, MAX_MEMORY_MB, truncate_output
+
+WORKSPACE_SETUP_NONE = "none"
+WORKSPACE_SETUP_PACKAGE = "package"
+WORKSPACE_SETUP_DEV = "dev"
+WORKSPACE_SETUP_MODES = frozenset(
+    {WORKSPACE_SETUP_NONE, WORKSPACE_SETUP_PACKAGE, WORKSPACE_SETUP_DEV}
+)
+
+DOCKER_RUNTIME_ENV = {
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HOME": "/tmp",
+    "XDG_CACHE_HOME": "/tmp/.cache",
+    "PYTHONPYCACHEPREFIX": "/tmp/pycache",
+    "PYTEST_ADDOPTS": "--cache-dir=/tmp/pytest-cache",
+}
+
+_WORKSPACE_METADATA_FILES = (
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "requirements-test.txt",
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile",
+    "Pipfile.lock",
+)
+
+
+def _default_workspace_install_command(workspace_path: Path, setup_mode: str) -> str:
+    """Resolve the default dependency install command for a workspace."""
+    if setup_mode == WORKSPACE_SETUP_NONE:
+        return ""
+
+    pyproject = workspace_path / "pyproject.toml"
+    setup_py = workspace_path / "setup.py"
+    setup_cfg = workspace_path / "setup.cfg"
+    requirements_dev = workspace_path / "requirements-dev.txt"
+    requirements_test = workspace_path / "requirements-test.txt"
+    requirements = workspace_path / "requirements.txt"
+
+    if setup_mode == WORKSPACE_SETUP_DEV:
+        if pyproject.exists() or setup_py.exists() or setup_cfg.exists():
+            return 'python -m pip install -e ".[dev]"'
+        if requirements_dev.exists():
+            return "python -m pip install -r requirements-dev.txt"
+        if requirements_test.exists():
+            return "python -m pip install -r requirements-test.txt"
+        if requirements.exists():
+            return "python -m pip install -r requirements.txt pytest"
+    elif setup_mode == WORKSPACE_SETUP_PACKAGE:
+        if pyproject.exists() or setup_py.exists() or setup_cfg.exists():
+            return "python -m pip install -e ."
+        if requirements.exists():
+            return "python -m pip install -r requirements.txt"
+    else:
+        raise ValueError(
+            f"Unknown docker workspace setup mode: {setup_mode}. "
+            f"Available: {', '.join(sorted(WORKSPACE_SETUP_MODES))}"
+        )
+
+    raise ValueError(
+        f"Cannot infer how to prepare workspace image for {workspace_path}. "
+        "Set docker_workspace_install_command explicitly or add standard Python "
+        "project metadata such as pyproject.toml or requirements.txt."
+    )
+
+
+def _workspace_dependency_hash(workspace_path: Path) -> str:
+    """Hash dependency metadata files to derive a cacheable workspace image tag."""
+    digest = hashlib.sha256()
+
+    for filename in _WORKSPACE_METADATA_FILES:
+        path = workspace_path / filename
+        if not path.exists() or not path.is_file():
+            continue
+        digest.update(filename.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+
+    return digest.hexdigest()[:16]
+
+
+def _workspace_image_tag(base_image: str, workspace_path: Path, install_command: str) -> str:
+    """Compute a deterministic local Docker tag for a prepared workspace image."""
+    digest = hashlib.sha256()
+    digest.update(base_image.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(str(workspace_path.resolve()).encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(install_command.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(_workspace_dependency_hash(workspace_path).encode("utf-8"))
+    return f"snipara-sandbox-workspace:{digest.hexdigest()[:16]}"
+
+
+def _workspace_image_dockerfile(base_image: str, install_command: str) -> str:
+    """Generate a Dockerfile that provisions project dependencies into an image."""
+    return f"""
+FROM {base_image}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \\
+    PYTHONUNBUFFERED=1 \\
+    PIP_NO_CACHE_DIR=1 \\
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \\
+    HOME=/tmp \\
+    XDG_CACHE_HOME=/tmp/.cache \\
+    PYTHONPYCACHEPREFIX=/tmp/pycache \\
+    PYTEST_ADDOPTS=--cache-dir=/tmp/pytest-cache
+
+WORKDIR /workspace
+COPY . /workspace
+RUN python -m pip install --upgrade pip && \\
+    {install_command}
+"""
+
+
+def build_workspace_image(
+    *,
+    base_image: str,
+    workspace_path: Path,
+    setup_mode: str,
+    install_command: str | None = None,
+) -> str:
+    """Build or reuse a cached Docker image with workspace dependencies installed."""
+    if not DOCKER_AVAILABLE:
+        raise ImportError(
+            "Docker support requires 'docker' package. "
+            "Install with: pip install snipara-sandbox[docker]"
+        )
+
+    workspace_path = workspace_path.resolve()
+    if not workspace_path.exists() or not workspace_path.is_dir():
+        raise ValueError(f"Workspace path does not exist or is not a directory: {workspace_path}")
+
+    resolved_command = install_command or _default_workspace_install_command(
+        workspace_path, setup_mode
+    )
+    tag = _workspace_image_tag(base_image, workspace_path, resolved_command)
+
+    client = docker.from_env()  # type: ignore[attr-defined]
+    try:
+        client.images.get(tag)
+        return tag
+    except ImageNotFound:
+        pass
+
+    dockerfile_content = _workspace_image_dockerfile(base_image, resolved_command)
+    dockerfile_path: Path | None = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=workspace_path,
+            prefix=".snipara-sandbox-",
+            suffix=".Dockerfile",
+            delete=False,
+        ) as handle:
+            handle.write(dockerfile_content)
+            dockerfile_path = Path(handle.name)
+
+        dockerfile_rel = dockerfile_path.relative_to(workspace_path)
+        client.images.build(
+            path=str(workspace_path),
+            dockerfile=str(dockerfile_rel),
+            tag=tag,
+            rm=True,
+            pull=False,
+        )
+        return tag
+    finally:
+        if dockerfile_path is not None:
+            dockerfile_path.unlink(missing_ok=True)
 
 
 class DockerREPL(BaseREPL):
@@ -258,7 +435,7 @@ print(f"__RLM_METRICS__:{{_cpu_ms}}:{{_mem_bytes}}")
                         volumes=volumes,
                         working_dir="/workspace" if has_workdir_mount else "/code",
                         network_disabled=self.network_disabled,
-                        environment={"PYTHONDONTWRITEBYTECODE": "1"},
+                        environment=DOCKER_RUNTIME_ENV,
                         mem_limit=self.memory,
                         cpu_quota=int(self.cpus * 100000),
                         cpu_period=100000,

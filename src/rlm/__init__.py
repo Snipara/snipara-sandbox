@@ -14,7 +14,7 @@ from rlm.core.types import (
 from rlm.tools.base import Tool
 from rlm.tools.registry import ToolRegistry
 
-__version__ = "2.2.2"
+__version__ = "2.2.3"
 
 SniparaSandboxConfig = RLMConfig
 Sandbox = SniparaSandbox

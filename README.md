@@ -133,7 +133,7 @@ pip install snipara-sandbox[snipara]
 pip install snipara-sandbox[all]
 ```
 
-Package version in this repo: `2.2.2`
+Package version in this repo: `2.2.3`
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
@@ -284,7 +284,7 @@ docker_memory = "512m"
 docker_network_disabled = true
 docker_mount_workspace = true
 # docker_workspace_path = "."
-docker_workspace_setup = "none"  # set to "dev" to preinstall workspace test deps
+docker_workspace_setup = "none"  # use "tests-only" or "dev" for repo-backed test runs
 # docker_workspace_install_command = "python -m pip install -e \".[dev]\""
 
 snipara_project_slug = "your-project"
@@ -317,13 +317,18 @@ For actual repo-backed test runs, enable workspace setup:
 [snipara_sandbox]
 environment = "docker"
 docker_mount_workspace = true
-docker_workspace_setup = "dev"
+docker_workspace_setup = "tests-only"
 ```
 
 That prepares a cached local Docker image from the current workspace and
 installs its dependencies at image-build time. Runtime execution still uses a
-read-only mount and no network. If your project does not use `.[dev]`, set
-`docker_workspace_install_command` explicitly.
+read-only mount and no network. `tests-only` installs `pytest` and
+`pytest-asyncio` while exposing the mounted repo via `PYTHONPATH=/workspace`;
+`dev` performs a full editable dev install instead. The workspace-image build
+uses a sandbox-owned context instead of the project's `.dockerignore`, so test
+files and packaging metadata remain available, and build failures now include
+recent Docker log lines for faster debugging. If your project does not use
+`.[dev]`, set `docker_workspace_install_command` explicitly.
 
 ```bash
 snipara-sandbox run --env docker "Validate this user-submitted transformation"

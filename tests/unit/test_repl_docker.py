@@ -1,6 +1,7 @@
 """Tests for Docker REPL sandbox."""
 
 import asyncio
+import tarfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -30,6 +31,14 @@ class TestWorkspaceImagePreparation:
 
         assert command == "python -m pip install -r requirements.txt"
 
+    def test_default_workspace_install_command_tests_only(self, tmp_path: Path):
+        """Should install only the test runner dependencies in tests-only mode."""
+        from rlm.repl.docker import _default_workspace_install_command
+
+        command = _default_workspace_install_command(tmp_path, "tests-only")
+
+        assert command == "python -m pip install pytest pytest-asyncio"
+
     def test_workspace_install_command_requires_project_metadata(self, tmp_path: Path):
         """Should fail clearly when workspace install mode cannot be inferred."""
         from rlm.repl.docker import _default_workspace_install_command
@@ -38,6 +47,33 @@ class TestWorkspaceImagePreparation:
             _default_workspace_install_command(tmp_path, "dev")
 
         assert "Cannot infer" in str(exc_info.value)
+
+    def test_build_context_tarfile_ignores_project_dockerignore_behavior(self, tmp_path: Path):
+        """Should keep tests and README in the build context while dropping heavy noise."""
+        from rlm.repl.docker import _build_context_tarfile
+
+        (tmp_path / "README.md").write_text("demo\n")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_demo.py").write_text("def test_ok():\n    assert True\n")
+        (tmp_path / ".venv").mkdir()
+        (tmp_path / ".venv" / "ignored.txt").write_text("skip me\n")
+        (tmp_path / "__pycache__").mkdir()
+        (tmp_path / "__pycache__" / "ignored.pyc").write_bytes(b"compiled")
+
+        context = _build_context_tarfile(
+            tmp_path,
+            ".snipara-sandbox.Dockerfile",
+            "FROM python:3.11-slim\n",
+        )
+
+        with tarfile.open(fileobj=context, mode="r") as archive:
+            names = set(archive.getnames())
+
+        assert ".snipara-sandbox.Dockerfile" in names
+        assert "README.md" in names
+        assert "tests/test_demo.py" in names
+        assert ".venv/ignored.txt" not in names
+        assert "__pycache__/ignored.pyc" not in names
 
     @patch("rlm.repl.docker.DOCKER_AVAILABLE", True)
     @patch("rlm.repl.docker.docker")
@@ -80,9 +116,43 @@ class TestWorkspaceImagePreparation:
 
         assert tag.startswith("snipara-sandbox-workspace:")
         build_kwargs = mock_client.images.build.call_args.kwargs
-        assert build_kwargs["path"] == str(tmp_path.resolve())
+        assert build_kwargs["custom_context"] is True
+        assert build_kwargs["encoding"] == "utf-8"
+        assert build_kwargs["dockerfile"] == ".snipara-sandbox.Dockerfile"
+        assert hasattr(build_kwargs["fileobj"], "read")
         assert build_kwargs["tag"] == tag
-        assert "Dockerfile" in build_kwargs["dockerfile"]
+
+    @patch("rlm.repl.docker.DOCKER_AVAILABLE", True)
+    @patch("rlm.repl.docker.docker")
+    def test_build_workspace_image_surfaces_recent_build_logs(self, mock_docker, tmp_path: Path):
+        """Should raise a readable error with the recent Docker build log."""
+        from rlm.repl.docker import BuildError, ImageNotFound, build_workspace_image
+
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n")
+
+        mock_client = MagicMock()
+        mock_docker.from_env.return_value = mock_client
+        mock_client.images.get.side_effect = ImageNotFound("missing")
+        mock_client.images.build.side_effect = BuildError(
+            "The command '/bin/sh -c pip install' returned a non-zero code: 1",
+            build_log=[
+                {"stream": "Step 1/3 : FROM python:3.11-slim\n"},
+                {"stream": "Step 2/3 : COPY . /workspace\n"},
+                {"errorDetail": {"message": "ERROR: Could not find README.md\n"}},
+            ],
+        )
+
+        with pytest.raises(RuntimeError) as exc_info:
+            build_workspace_image(
+                base_image="python:3.11-slim",
+                workspace_path=tmp_path,
+                setup_mode="dev",
+            )
+
+        message = str(exc_info.value)
+        assert "Failed to prepare workspace image" in message
+        assert "Recent build log:" in message
+        assert "ERROR: Could not find README.md" in message
 
     def test_workspace_image_tag_changes_with_dependency_metadata(self, tmp_path: Path):
         """Should invalidate prepared images when dependency metadata changes."""
@@ -426,6 +496,7 @@ class TestDockerREPLExecution:
         assert str(tmp_path) in volumes
         assert call_kwargs["working_dir"] == "/workspace"
         assert call_kwargs["environment"]["PYTHONDONTWRITEBYTECODE"] == "1"
+        assert call_kwargs["environment"]["PYTHONPATH"] == "/workspace"
 
     @pytest.mark.asyncio
     @patch("rlm.repl.docker.DOCKER_AVAILABLE", True)
@@ -450,6 +521,7 @@ class TestDockerREPLExecution:
         volumes = call_kwargs.get("volumes", {})
         assert str(missing_path) not in volumes
         assert call_kwargs["working_dir"] == "/code"
+        assert "PYTHONPATH" not in call_kwargs["environment"]
 
 
 class TestDockerREPLResourceLimits:

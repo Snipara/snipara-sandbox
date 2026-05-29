@@ -561,7 +561,7 @@ Show version information.
 | `SNIPARA_SANDBOX_DOCKER_IMAGE` | Docker image | `python:3.11-slim` |
 | `SNIPARA_SANDBOX_DOCKER_MOUNT_WORKSPACE` | Read-only workspace mount toggle | `true` |
 | `SNIPARA_SANDBOX_DOCKER_WORKSPACE_PATH` | Mounted workspace path override | None |
-| `SNIPARA_SANDBOX_DOCKER_WORKSPACE_SETUP` | Prepared workspace image mode | `none` |
+| `SNIPARA_SANDBOX_DOCKER_WORKSPACE_SETUP` | Prepared workspace image mode (`none`, `package`, `tests-only`, `dev`) | `none` |
 | `SNIPARA_SANDBOX_DOCKER_WORKSPACE_INSTALL_COMMAND` | Custom workspace install command | None |
 | `SNIPARA_SANDBOX_MAX_DEPTH` | Max depth | `4` |
 | `SNIPARA_SANDBOX_TOKEN_BUDGET` | Token budget | `8000` |

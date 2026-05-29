@@ -714,7 +714,7 @@ docker_memory = "512m"
 docker_network_disabled = true
 docker_mount_workspace = true
 # docker_workspace_path = "."
-docker_workspace_setup = "none"  # set to "dev" to preinstall project test deps
+docker_workspace_setup = "none"  # use "tests-only" or "dev" for repo-backed tests
 # docker_workspace_install_command = "python -m pip install -e \".[dev]\""
 """
 

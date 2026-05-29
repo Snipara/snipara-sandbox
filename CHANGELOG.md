@@ -4,39 +4,30 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
-### Known issues (from dogfooding the isolated Docker workspace path)
+## [2.2.3] - 2026-05-29
 
-Running real `pytest` inside a Docker image built from a production-ready repo
-(`docker_workspace_setup="dev"`, `pip install -e .[dev]`) surfaced friction that
-makes the isolated repo-backed path unusable on such repos today:
+### Changed
 
-- **The project's `.dockerignore` is silently reused for the workspace image
-  build.** A production-tuned `.dockerignore` typically excludes `*.md` and
-  `tests/`. The first breaks editable installs (e.g. `hatchling` raises
-  `OSError: Readme file does not exist: README.md` during metadata generation,
-  blocking the build immediately); the second means the very tests we want to
-  run are never copied into the image. Production images and test sandboxes have
-  opposite context needs.
+- Added a `tests-only` Docker workspace setup mode that installs `pytest` and
+  `pytest-asyncio`, then exposes the repo with `PYTHONPATH=/workspace` so
+  isolated test runs do not require a full editable package install.
 
-### Planned improvements
+### Fixed
 
-- **Use a sandbox-owned `.dockerignore`** for the workspace build context instead
-  of the project's: exclude only heavy noise (`.venv`, `node_modules`, `.git`,
-  `__pycache__`) while keeping `tests/`, `*.md`, and packaging metadata.
-- **Decouple "build the package" from "run the tests".** Add a
-  `setup="tests-only"` mode that installs just test deps (`pytest`,
-  `pytest-asyncio`) and exposes the repo via `PYTHONPATH=/workspace`, avoiding a
-  full editable install that requires intact packaging metadata.
-- **Surface build logs on failure.** The high-level Docker SDK raises an opaque
-  `BuildError` ("non-zero code: 1"); the real pip error is only visible via the
-  low-level `docker.APIClient`. Capture and print the last ~30 build log lines
-  when a workspace image build fails.
-- **Scope dependencies.** `dev` pulls the entire core dependency set (multi-GB,
-  multi-minute) even when target tests only import the stdlib. Allow a targeted
-  extras list (e.g. `install_extras=["test"]`).
-- **Anticipate codegen/Node steps.** Repos whose tests import an app needing a
-  generated client (e.g. Prisma) require a `post_install` hook such as
-  `prisma generate`, otherwise non-pure tests fail even after a successful build.
+- Workspace-image builds now use a sandbox-owned build context instead of the
+  project's `.dockerignore`, so repo-backed test runs keep `tests/`,
+  `README.md`, and packaging metadata available inside the image.
+- Docker workspace-image failures now surface recent build log lines instead of
+  only returning Docker's opaque high-level `BuildError`.
+
+### Remaining limitations
+
+- `dev` still installs the full project dependency set even when the target
+  tests only need a small subset; targeted extras or scoped installs are not
+  implemented yet.
+- Projects whose tests depend on generated artifacts or non-Python setup steps
+  still need explicit custom install commands or follow-up hooks; there is no
+  first-class `post_install` hook yet.
 
 ## [2.2.2] - 2026-05-29
 

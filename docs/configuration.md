@@ -55,7 +55,7 @@ docker_memory = "512m"
 docker_network_disabled = true
 docker_mount_workspace = true
 # docker_workspace_path = "."   # Optional override; defaults to the current directory
-docker_workspace_setup = "none" # "dev" builds a cached workspace image with test deps
+docker_workspace_setup = "none" # "tests-only" or "dev" build a cached workspace image
 # docker_workspace_install_command = "python -m pip install -e \".[dev]\""
 docker_timeout = 30
 
@@ -190,22 +190,31 @@ sandbox = SniparaSandbox(config=config)
 | `docker_network_disabled` | bool | `true` | Disable network access |
 | `docker_mount_workspace` | bool | `true` | Mount the workspace read-only at `/workspace` |
 | `docker_workspace_path` | Path | `None` | Override the mounted host path (defaults to current directory) |
-| `docker_workspace_setup` | str | `"none"` | `none`, `package`, or `dev` workspace image preparation mode |
+| `docker_workspace_setup` | str | `"none"` | `none`, `package`, `tests-only`, or `dev` workspace image preparation mode |
 | `docker_workspace_install_command` | str | `None` | Explicit install command used when preparing a workspace image |
 | `docker_timeout` | int | `30` | Per-execution timeout |
 
 ### Prepared Workspace Images
 
-When `docker_workspace_setup` is set to `package` or `dev`, Snipara Sandbox
-builds a cached local Docker image from the workspace before execution. This
-solves the main gap between an isolated container and real repo-backed tests:
-dependencies are installed at image-build time, while runtime execution still
-uses a read-only mount and `docker_network_disabled = true`.
+When `docker_workspace_setup` is set to `package`, `tests-only`, or `dev`,
+Snipara Sandbox builds a cached local Docker image from the workspace before
+execution. This solves the main gap between an isolated container and real
+repo-backed tests: dependencies are installed at image-build time, while
+runtime execution still uses a read-only mount and
+`docker_network_disabled = true`.
 
 - `package` tries `python -m pip install -e .` for standard Python projects, or
   `python -m pip install -r requirements.txt` when only requirements files are present.
+- `tests-only` installs `pytest` and `pytest-asyncio`, then exposes the mounted
+  workspace via `PYTHONPATH=/workspace` so tests can import the repo without a
+  full editable install.
 - `dev` tries `python -m pip install -e ".[dev]"` first, then falls back to
   `requirements-dev.txt`, `requirements-test.txt`, or `requirements.txt + pytest`.
+- The build context ignores the project's `.dockerignore` and uses a
+  sandbox-owned filter instead, keeping `tests/`, `README.md`, and packaging
+  metadata available for repo-backed test runs.
+- Workspace-image build failures include the recent Docker build log lines to
+  make dependency/setup errors easier to debug.
 - Use `docker_workspace_install_command` when your project needs a custom setup command.
 
 ### Logging Settings

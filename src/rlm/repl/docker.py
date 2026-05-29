@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import hashlib
+import io
 import json
+import os
+import tarfile
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 try:
     import docker
-    from docker.errors import ContainerError, ImageNotFound
+    from docker.errors import BuildError, ContainerError, ImageNotFound
 
     DOCKER_AVAILABLE = True
 except ImportError:
@@ -42,6 +47,14 @@ except ImportError:
 
         pass
 
+    class BuildError(Exception):  # type: ignore[no-redef]
+        """Stub for docker.errors.BuildError when docker not installed."""
+
+        def __init__(self, reason: str = "", build_log: list[object] | None = None):
+            self.reason = reason
+            self.build_log = build_log or []
+            super().__init__(reason)
+
 
 from rlm.core.types import REPLResult
 from rlm.repl.base import BaseREPL
@@ -49,9 +62,15 @@ from rlm.repl.safety import MAX_EXECUTION_TIME, MAX_MEMORY_MB, truncate_output
 
 WORKSPACE_SETUP_NONE = "none"
 WORKSPACE_SETUP_PACKAGE = "package"
+WORKSPACE_SETUP_TESTS_ONLY = "tests-only"
 WORKSPACE_SETUP_DEV = "dev"
 WORKSPACE_SETUP_MODES = frozenset(
-    {WORKSPACE_SETUP_NONE, WORKSPACE_SETUP_PACKAGE, WORKSPACE_SETUP_DEV}
+    {
+        WORKSPACE_SETUP_NONE,
+        WORKSPACE_SETUP_PACKAGE,
+        WORKSPACE_SETUP_TESTS_ONLY,
+        WORKSPACE_SETUP_DEV,
+    }
 )
 
 DOCKER_RUNTIME_ENV = {
@@ -75,6 +94,34 @@ _WORKSPACE_METADATA_FILES = (
     "Pipfile.lock",
 )
 
+_WORKSPACE_CONTEXT_EXCLUDED_DIRS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".nox",
+        "build",
+        "dist",
+    }
+)
+
+_WORKSPACE_CONTEXT_EXCLUDED_GLOBS = (
+    "*.pyc",
+    "*.pyo",
+    "*.pyd",
+    ".DS_Store",
+    ".coverage",
+    ".snipara-sandbox-*",
+)
+
 
 def _default_workspace_install_command(workspace_path: Path, setup_mode: str) -> str:
     """Resolve the default dependency install command for a workspace."""
@@ -88,6 +135,8 @@ def _default_workspace_install_command(workspace_path: Path, setup_mode: str) ->
     requirements_test = workspace_path / "requirements-test.txt"
     requirements = workspace_path / "requirements.txt"
 
+    if setup_mode == WORKSPACE_SETUP_TESTS_ONLY:
+        return "python -m pip install pytest pytest-asyncio"
     if setup_mode == WORKSPACE_SETUP_DEV:
         if pyproject.exists() or setup_py.exists() or setup_cfg.exists():
             return 'python -m pip install -e ".[dev]"'
@@ -165,6 +214,100 @@ RUN python -m pip install --upgrade pip && \\
 """
 
 
+def _should_exclude_context_path(relative_path: Path) -> bool:
+    """Check whether a workspace path should be excluded from the build context."""
+    if any(part in _WORKSPACE_CONTEXT_EXCLUDED_DIRS for part in relative_path.parts):
+        return True
+
+    relative_str = relative_path.as_posix()
+    name = relative_path.name
+    return any(
+        fnmatch.fnmatch(relative_str, pattern) or fnmatch.fnmatch(name, pattern)
+        for pattern in _WORKSPACE_CONTEXT_EXCLUDED_GLOBS
+    )
+
+
+def _build_context_tarfile(
+    workspace_path: Path, dockerfile_name: str, dockerfile_content: str
+) -> io.BytesIO:
+    """Create a sandbox-owned Docker build context.
+
+    This intentionally ignores the project's own `.dockerignore`, because
+    production-lean ignore rules often exclude tests and README files that are
+    required for editable installs and repo-backed test runs.
+    """
+    context = io.BytesIO()
+    with tarfile.open(fileobj=context, mode="w") as archive:
+        dockerfile_bytes = dockerfile_content.encode("utf-8")
+        dockerfile_info = tarfile.TarInfo(dockerfile_name)
+        dockerfile_info.size = len(dockerfile_bytes)
+        dockerfile_info.mode = 0o644
+        dockerfile_info.mtime = int(time.time())
+        archive.addfile(dockerfile_info, io.BytesIO(dockerfile_bytes))
+
+        for path in sorted(workspace_path.rglob("*")):
+            rel_path = path.relative_to(workspace_path)
+            if _should_exclude_context_path(rel_path):
+                continue
+
+            if path.is_symlink():
+                target = os.readlink(path)
+                info = tarfile.TarInfo(rel_path.as_posix())
+                info.type = tarfile.SYMTYPE
+                info.linkname = target
+                info.mode = 0o777
+                info.mtime = int(time.time())
+                archive.addfile(info)
+                continue
+
+            archive.add(path, arcname=rel_path.as_posix(), recursive=False)
+
+    context.seek(0)
+    return context
+
+
+def _extract_build_log_lines(build_log: list[object], limit: int = 30) -> list[str]:
+    """Extract readable build log lines from Docker build output."""
+    lines: list[str] = []
+    for entry in build_log:
+        if isinstance(entry, dict):
+            for key in ("stream", "error", "message"):
+                value = entry.get(key)
+                if isinstance(value, str) and value.strip():
+                    lines.extend(line.rstrip() for line in value.splitlines() if line.strip())
+            error_detail = entry.get("errorDetail")
+            if isinstance(error_detail, dict):
+                message = error_detail.get("message")
+                if isinstance(message, str) and message.strip():
+                    lines.extend(line.rstrip() for line in message.splitlines() if line.strip())
+        elif isinstance(entry, str) and entry.strip():
+            lines.extend(line.rstrip() for line in entry.splitlines() if line.strip())
+
+    return lines[-limit:]
+
+
+def _format_build_error(workspace_path: Path, tag: str, exc: BuildError) -> str:
+    """Render a useful workspace-image build failure."""
+    log_lines = _extract_build_log_lines(getattr(exc, "build_log", []))
+    summary = getattr(exc, "reason", None) or str(exc) or "Docker build failed"
+
+    if log_lines:
+        return (
+            f"Failed to prepare workspace image '{tag}' for {workspace_path}. "
+            f"{summary}\n\nRecent build log:\n" + "\n".join(log_lines)
+        )
+
+    return f"Failed to prepare workspace image '{tag}' for {workspace_path}. {summary}"
+
+
+def _runtime_environment(has_workdir_mount: bool) -> dict[str, str]:
+    """Build the runtime environment for Docker executions."""
+    env = dict(DOCKER_RUNTIME_ENV)
+    if has_workdir_mount:
+        env["PYTHONPATH"] = "/workspace"
+    return env
+
+
 def build_workspace_image(
     *,
     base_image: str,
@@ -195,33 +338,23 @@ def build_workspace_image(
     except ImageNotFound:
         pass
 
-    dockerfile_content = _workspace_image_dockerfile(base_image, resolved_command)
-    dockerfile_path: Path | None = None
-
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=workspace_path,
-            prefix=".snipara-sandbox-",
-            suffix=".Dockerfile",
-            delete=False,
-        ) as handle:
-            handle.write(dockerfile_content)
-            dockerfile_path = Path(handle.name)
-
-        dockerfile_rel = dockerfile_path.relative_to(workspace_path)
+        dockerfile_name = ".snipara-sandbox.Dockerfile"
+        dockerfile_content = _workspace_image_dockerfile(base_image, resolved_command)
+        context = _build_context_tarfile(workspace_path, dockerfile_name, dockerfile_content)
         client.images.build(
-            path=str(workspace_path),
-            dockerfile=str(dockerfile_rel),
+            fileobj=context,
+            custom_context=True,
+            encoding="utf-8",
+            dockerfile=dockerfile_name,
             tag=tag,
             rm=True,
             pull=False,
+            decode=True,
         )
         return tag
-    finally:
-        if dockerfile_path is not None:
-            dockerfile_path.unlink(missing_ok=True)
+    except BuildError as exc:
+        raise RuntimeError(_format_build_error(workspace_path, tag, exc)) from exc
 
 
 class DockerREPL(BaseREPL):
@@ -435,7 +568,7 @@ print(f"__RLM_METRICS__:{{_cpu_ms}}:{{_mem_bytes}}")
                         volumes=volumes,
                         working_dir="/workspace" if has_workdir_mount else "/code",
                         network_disabled=self.network_disabled,
-                        environment=DOCKER_RUNTIME_ENV,
+                        environment=_runtime_environment(has_workdir_mount),
                         mem_limit=self.memory,
                         cpu_quota=int(self.cpus * 100000),
                         cpu_period=100000,

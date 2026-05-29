@@ -133,7 +133,7 @@ pip install snipara-sandbox[snipara]
 pip install snipara-sandbox[all]
 ```
 
-Package version in this repo: `2.2.0`
+Package version in this repo: `2.2.1`
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 

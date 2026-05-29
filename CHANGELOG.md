@@ -4,9 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## [2.2.1] - 2026-05-29
+
+### Fixed
+
+- `snipara-sandbox run` now honors `trust_level = "local"` when `environment = "local"`, so documented repo-local development flows use `LocalDevREPL` instead of the restricted sandbox.
+- `snipara-sandbox config show` now explains that empty `allowed_paths` means the current working directory only, rather than implying no file access.
+
 ### Changed
 
-- Renamed the MCP server display identity to `SniparaSandbox`, so client-generated function prefixes migrate from legacy RLM naming to `SniparaSandbox-*`.
+- Docker executions now mount the current workspace read-only at `/workspace` by default, with `docker_mount_workspace` and `docker_workspace_path` available to disable or override that behavior.
+- Updated Docker runtime, CLI, docs, and tests to reflect the repo-visible isolated execution model.
 
 ## [2.2.0] - 2026-05-11
 

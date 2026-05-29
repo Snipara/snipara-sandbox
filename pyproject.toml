@@ -1,6 +1,6 @@
 [project]
 name = "snipara-sandbox"
-version = "2.2.3"
+version = "2.2.4"
 description = "Snipara Sandbox runtime for stateful, sandboxed AI workflow execution"
 readme = "README.md"
 license = "Apache-2.0"

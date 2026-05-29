@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## [2.2.4] - 2026-05-29
+
+### Fixed
+
+- Workspace-image builds no longer crash with `AttributeError: 'dict' object has
+  no attribute 'decode'`. `decode=True` was passed to the high-level
+  `images.build()`, which already decodes its log stream internally; removing it
+  lets the build run. Validated end-to-end: a `tests-only` image builds in ~7s
+  and the sandbox-owned context correctly ships `tests/` and `README.md`
+  (editable metadata generation now succeeds).
+
 ## [2.2.3] - 2026-05-29
 
 ### Changed

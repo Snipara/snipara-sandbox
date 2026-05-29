@@ -350,7 +350,6 @@ def build_workspace_image(
             tag=tag,
             rm=True,
             pull=False,
-            decode=True,
         )
         return tag
     except BuildError as exc:

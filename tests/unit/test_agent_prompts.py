@@ -10,7 +10,12 @@ class TestAgentSystemPrompt:
         assert "FINAL" in AGENT_SYSTEM_PROMPT
         assert "FINAL_VAR" in AGENT_SYSTEM_PROMPT
         assert "execute_python" in AGENT_SYSTEM_PROMPT
+        assert "file_search" in AGENT_SYSTEM_PROMPT
         assert "terminate" in AGENT_SYSTEM_PROMPT.lower()
+
+    def test_includes_targeted_reading_guardrails(self):
+        assert "Do not recursively list the repository" in AGENT_SYSTEM_PROMPT
+        assert "Prefer file_search over list_files" in AGENT_SYSTEM_PROMPT
 
     def test_mentions_snipara_tools(self):
         assert "snipara_context_query" in AGENT_SYSTEM_PROMPT

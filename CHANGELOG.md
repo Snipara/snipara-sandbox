@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## [2.2.7] - 2026-05-31
+
+### Added
+
+- Added `file_search`, a bounded source-search tool backed by `rg` with a Python
+  fallback, so autonomous agents can find exact files and lines before reading.
+
+### Fixed
+
+- Capped `file_read` and `list_files` output sizes, ignored noisy generated and
+  vendor directories, and refused broad recursive listings to prevent autonomous
+  Sandbox runs from spending their budget on repo-wide inventory.
+- Updated the autonomous agent prompt to prefer targeted search and focused line
+  reads over broad file listing.
+
 ## [2.2.6] - 2026-05-31
 
 ### Fixed

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import fnmatch
+import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +17,33 @@ if TYPE_CHECKING:
 
 # Module-level allowed paths (set by get_builtin_tools)
 _allowed_paths: list[Path] = []
+
+DEFAULT_FILE_READ_MAX_LINES = 80
+ABSOLUTE_FILE_READ_MAX_LINES = 120
+DEFAULT_LIST_FILES_MAX_RESULTS = 60
+ABSOLUTE_LIST_FILES_MAX_RESULTS = 100
+DEFAULT_FILE_SEARCH_MAX_RESULTS = 40
+ABSOLUTE_FILE_SEARCH_MAX_RESULTS = 80
+ABSOLUTE_FILE_SEARCH_CONTEXT_LINES = 3
+BROAD_GLOBS = {"*", "**", "**/*", "./**/*"}
+IGNORED_DIRS = {
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".snipara",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "htmlcov",
+    "logs",
+    "node_modules",
+    "site-packages",
+    "venv",
+}
 
 
 def _validate_path(path: str, allowed_paths: list[Path]) -> tuple[Path | None, str | None]:
@@ -46,6 +77,25 @@ def _validate_path(path: str, allowed_paths: list[Path]) -> tuple[Path | None, s
     return None, f"Access denied: path '{path}' is outside allowed directories"
 
 
+def _clamp_int(value: int, default: int, minimum: int, maximum: int) -> int:
+    """Clamp user-provided integer limits to a safe range."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return min(max(parsed, minimum), maximum)
+
+
+def _is_ignored_path(path: Path) -> bool:
+    """Return True when a path sits inside a noisy generated/vendor directory."""
+    return any(part in IGNORED_DIRS for part in path.parts)
+
+
+def _is_broad_recursive_search(pattern: str, recursive: bool) -> bool:
+    """Detect recursive listings that would enumerate most of the workspace."""
+    return recursive and pattern.strip() in BROAD_GLOBS
+
+
 def get_builtin_tools(repl: BaseREPL, allowed_paths: list[Path] | None = None) -> list[Tool]:
     """Get builtin tools with the given REPL instance.
 
@@ -63,6 +113,7 @@ def get_builtin_tools(repl: BaseREPL, allowed_paths: list[Path] | None = None) -
     return [
         _create_execute_code_tool(repl),
         _create_file_read_tool(),
+        _create_file_search_tool(),
         _create_list_files_tool(),
     ]
 
@@ -125,7 +176,7 @@ def _create_file_read_tool() -> Tool:
         path: str,
         start_line: int = 1,
         end_line: int | None = None,
-        max_lines: int = 100,
+        max_lines: int = DEFAULT_FILE_READ_MAX_LINES,
     ) -> dict[str, Any]:
         """Read contents of a file.
 
@@ -154,6 +205,13 @@ def _create_file_read_tool() -> Tool:
             with open(file_path, encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
 
+            requested_max_lines = max_lines
+            max_lines = _clamp_int(
+                max_lines,
+                DEFAULT_FILE_READ_MAX_LINES,
+                1,
+                ABSOLUTE_FILE_READ_MAX_LINES,
+            )
             total_lines = len(lines)
             start_idx = max(0, start_line - 1)
             end_idx = end_line if end_line else start_idx + max_lines
@@ -161,6 +219,7 @@ def _create_file_read_tool() -> Tool:
 
             selected_lines = lines[start_idx:end_idx]
             content = "".join(selected_lines)
+            capped = requested_max_lines != max_lines
 
             return {
                 "content": content,
@@ -169,6 +228,8 @@ def _create_file_read_tool() -> Tool:
                 "end_line": end_idx,
                 "total_lines": total_lines,
                 "truncated": end_idx < total_lines,
+                "max_lines": max_lines,
+                "limit_capped": capped,
             }
 
         except Exception as e:
@@ -199,14 +260,267 @@ def _create_file_read_tool() -> Tool:
                 },
                 "max_lines": {
                     "type": "integer",
-                    "default": 100,
-                    "description": "Maximum number of lines to return",
+                    "default": DEFAULT_FILE_READ_MAX_LINES,
+                    "maximum": ABSOLUTE_FILE_READ_MAX_LINES,
+                    "description": (
+                        "Maximum number of lines to return. Values above "
+                        f"{ABSOLUTE_FILE_READ_MAX_LINES} are capped."
+                    ),
                 },
             },
             "required": ["path"],
         },
         handler=file_read,
     )
+
+
+def _create_file_search_tool() -> Tool:
+    """Create the file_search tool."""
+
+    async def file_search(
+        pattern: str,
+        path: str = ".",
+        glob: str | None = None,
+        max_results: int = DEFAULT_FILE_SEARCH_MAX_RESULTS,
+        context_lines: int = 0,
+        regex: bool = True,
+    ) -> dict[str, Any]:
+        """Search files for a targeted pattern without listing the whole tree."""
+        if not pattern.strip():
+            return {"error": "No search pattern provided", "matches": []}
+
+        search_path, error = _validate_path(path, _allowed_paths)
+        if error:
+            return {"error": error, "matches": []}
+
+        assert search_path is not None
+
+        if not search_path.exists():
+            return {"error": f"Path not found: {path}", "matches": []}
+
+        max_results = _clamp_int(
+            max_results,
+            DEFAULT_FILE_SEARCH_MAX_RESULTS,
+            1,
+            ABSOLUTE_FILE_SEARCH_MAX_RESULTS,
+        )
+        context_lines = _clamp_int(
+            context_lines,
+            0,
+            0,
+            ABSOLUTE_FILE_SEARCH_CONTEXT_LINES,
+        )
+
+        rg_path = shutil.which("rg")
+        if rg_path:
+            return _run_rg_search(
+                rg_path=rg_path,
+                search_path=search_path,
+                pattern=pattern,
+                glob=glob,
+                max_results=max_results,
+                context_lines=context_lines,
+                regex=regex,
+            )
+
+        return _run_python_search(
+            search_path=search_path,
+            pattern=pattern,
+            glob=glob,
+            max_results=max_results,
+            context_lines=context_lines,
+            regex=regex,
+        )
+
+    return Tool(
+        name="file_search",
+        description=(
+            "Search files for a specific pattern and return matching file paths, "
+            "line numbers, and snippets. Prefer this before file_read when you "
+            "do not already know the exact file and line range. Generated and "
+            "vendor directories are skipped."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Text or regex pattern to search for",
+                },
+                "path": {
+                    "type": "string",
+                    "default": ".",
+                    "description": "File or directory to search within",
+                },
+                "glob": {
+                    "type": "string",
+                    "description": "Optional glob filter, e.g. '*.py' or 'src/**/*.py'",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "default": DEFAULT_FILE_SEARCH_MAX_RESULTS,
+                    "maximum": ABSOLUTE_FILE_SEARCH_MAX_RESULTS,
+                    "description": "Maximum matches to return; large values are capped",
+                },
+                "context_lines": {
+                    "type": "integer",
+                    "default": 0,
+                    "maximum": ABSOLUTE_FILE_SEARCH_CONTEXT_LINES,
+                    "description": "Context lines around each match; capped at 3",
+                },
+                "regex": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Treat pattern as a regex. Set false for literal text.",
+                },
+            },
+            "required": ["pattern"],
+        },
+        handler=file_search,
+    )
+
+
+def _run_rg_search(
+    *,
+    rg_path: str,
+    search_path: Path,
+    pattern: str,
+    glob: str | None,
+    max_results: int,
+    context_lines: int,
+    regex: bool,
+) -> dict[str, Any]:
+    """Run ripgrep for a bounded search."""
+    cmd = [
+        rg_path,
+        "--line-number",
+        "--with-filename",
+        "--no-heading",
+        "--color",
+        "never",
+        "--max-count",
+        str(max_results),
+    ]
+    for ignored in sorted(IGNORED_DIRS):
+        cmd.extend(["--glob", f"!{ignored}/**"])
+        cmd.extend(["--glob", f"!**/{ignored}/**"])
+    if glob:
+        cmd.extend(["--glob", glob])
+    if context_lines:
+        cmd.extend(["--context", str(context_lines)])
+    if not regex:
+        cmd.append("--fixed-strings")
+    cmd.extend(["--", pattern, str(search_path)])
+
+    try:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"error": f"Error searching files: {e}", "matches": []}
+
+    if completed.returncode not in {0, 1}:
+        return {
+            "error": completed.stderr.strip() or "Search failed",
+            "matches": [],
+        }
+
+    matches = _parse_rg_output(completed.stdout, max_results)
+    return {
+        "matches": matches,
+        "count": len(matches),
+        "truncated": len(matches) >= max_results,
+        "path": str(search_path),
+        "glob": glob,
+        "max_results": max_results,
+    }
+
+
+def _parse_rg_output(output: str, max_results: int) -> list[dict[str, Any]]:
+    """Parse ripgrep line output into a small structured result set."""
+    matches: list[dict[str, Any]] = []
+    for line in output.splitlines():
+        if not line or line == "--":
+            continue
+        parts = line.split(":", 2)
+        if len(parts) != 3 or not parts[1].isdigit():
+            continue
+        path, line_number, text = parts
+        if _is_ignored_path(Path(path)):
+            continue
+        matches.append(
+            {
+                "path": path,
+                "line": int(line_number),
+                "text": text[:500],
+            }
+        )
+        if len(matches) >= max_results:
+            break
+    return matches
+
+
+def _run_python_search(
+    *,
+    search_path: Path,
+    pattern: str,
+    glob: str | None,
+    max_results: int,
+    context_lines: int,
+    regex: bool,
+) -> dict[str, Any]:
+    """Fallback bounded search when ripgrep is unavailable."""
+    try:
+        compiled = re.compile(pattern) if regex else None
+    except re.error as e:
+        return {"error": f"Invalid regex: {e}", "matches": []}
+
+    candidates = [search_path] if search_path.is_file() else search_path.rglob("*")
+    matches: list[dict[str, Any]] = []
+
+    for candidate in candidates:
+        if len(matches) >= max_results:
+            break
+        if _is_ignored_path(candidate) or not candidate.is_file():
+            continue
+        if glob and not fnmatch.fnmatch(str(candidate), glob):
+            continue
+        try:
+            lines = candidate.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for idx, line in enumerate(lines, 1):
+            found = bool(compiled.search(line)) if compiled else pattern in line
+            if not found:
+                continue
+            if context_lines:
+                start = max(1, idx - context_lines)
+                end = min(len(lines), idx + context_lines)
+                text = "\n".join(lines[start - 1 : end])
+            else:
+                text = line
+            matches.append(
+                {
+                    "path": str(candidate),
+                    "line": idx,
+                    "text": text[:500],
+                }
+            )
+            if len(matches) >= max_results:
+                break
+
+    return {
+        "matches": matches,
+        "count": len(matches),
+        "truncated": len(matches) >= max_results,
+        "path": str(search_path),
+        "glob": glob,
+        "max_results": max_results,
+    }
 
 
 def _create_list_files_tool() -> Tool:
@@ -216,7 +530,7 @@ def _create_list_files_tool() -> Tool:
         path: str = ".",
         pattern: str = "*",
         recursive: bool = False,
-        max_results: int = 100,
+        max_results: int = DEFAULT_LIST_FILES_MAX_RESULTS,
     ) -> dict[str, Any]:
         """List files in a directory.
 
@@ -241,17 +555,36 @@ def _create_list_files_tool() -> Tool:
         if not dir_path.is_dir():
             return {"error": f"Not a directory: {path}", "files": []}
 
+        if _is_broad_recursive_search(pattern, recursive):
+            return {
+                "error": (
+                    "Refusing broad recursive listing. Use file_search with a "
+                    "specific pattern or pass a narrower glob such as '*.py'."
+                ),
+                "files": [],
+                "count": 0,
+                "truncated": False,
+                "directory": str(dir_path),
+            }
+
         try:
+            requested_max_results = max_results
+            max_results = _clamp_int(
+                max_results,
+                DEFAULT_LIST_FILES_MAX_RESULTS,
+                1,
+                ABSOLUTE_LIST_FILES_MAX_RESULTS,
+            )
             if recursive:
                 matches = list(dir_path.rglob(pattern))
             else:
                 matches = list(dir_path.glob(pattern))
 
-            # Sort by path and limit results
-            matches = sorted(matches)[:max_results]
+            matches = sorted(match for match in matches if not _is_ignored_path(match))
+            limited_matches = matches[:max_results]
 
             files = []
-            for match in matches:
+            for match in limited_matches:
                 try:
                     stat = match.stat()
                     files.append(
@@ -275,8 +608,10 @@ def _create_list_files_tool() -> Tool:
             return {
                 "files": files,
                 "count": len(files),
-                "truncated": len(matches) >= max_results,
+                "truncated": len(matches) > max_results,
                 "directory": str(dir_path),
+                "max_results": max_results,
+                "limit_capped": requested_max_results != max_results,
             }
 
         except Exception as e:
@@ -309,8 +644,9 @@ def _create_list_files_tool() -> Tool:
                 },
                 "max_results": {
                     "type": "integer",
-                    "default": 100,
-                    "description": "Maximum number of files to return",
+                    "default": DEFAULT_LIST_FILES_MAX_RESULTS,
+                    "maximum": ABSOLUTE_LIST_FILES_MAX_RESULTS,
+                    "description": "Maximum number of files to return; large values are capped",
                 },
             },
         },

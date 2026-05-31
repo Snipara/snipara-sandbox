@@ -14,12 +14,12 @@ from rlm.tools.builtin import (
 class TestGetBuiltinTools:
     """Tests for get_builtin_tools function."""
 
-    def test_returns_three_tools(self):
-        """Should return list of three builtin tools."""
+    def test_returns_four_tools(self):
+        """Should return list of four builtin tools."""
         mock_repl = MagicMock()
         tools = get_builtin_tools(mock_repl)
 
-        assert len(tools) == 3
+        assert len(tools) == 4
 
     def test_tool_names(self):
         """Should return tools with correct names."""
@@ -29,6 +29,7 @@ class TestGetBuiltinTools:
         names = [t.name for t in tools]
         assert "execute_code" in names
         assert "file_read" in names
+        assert "file_search" in names
         assert "list_files" in names
 
 
@@ -160,6 +161,19 @@ class TestFileReadTool:
         assert len(lines) == 2
 
     @pytest.mark.asyncio
+    async def test_read_caps_large_max_lines(self, tool, tmp_path):
+        """Should cap large max_lines values."""
+        test_file = tmp_path / "large.txt"
+        test_file.write_text("".join(f"Line {i}\n" for i in range(200)))
+
+        result = await tool.execute(path=str(test_file), max_lines=10_000)
+
+        lines = result["content"].strip().split("\n")
+        assert len(lines) == 120
+        assert result["max_lines"] == 120
+        assert result["limit_capped"] is True
+
+    @pytest.mark.asyncio
     async def test_file_not_found(self, tool, tmp_path):
         """Should return error for non-existent file."""
         result = await tool.execute(path=str(tmp_path / "nonexistent.txt"))
@@ -178,6 +192,90 @@ class TestFileReadTool:
         assert result["content"] is None
 
 
+class TestFileSearchTool:
+    """Tests for file_search tool."""
+
+    @pytest.fixture
+    def tool(self, tmp_path):
+        """Create file_search tool with tmp_path allowed."""
+        mock_repl = MagicMock()
+        tools = get_builtin_tools(mock_repl, allowed_paths=[tmp_path])
+        return tools[2]
+
+    @pytest.fixture
+    def test_dir(self, tmp_path):
+        """Create searchable files."""
+        (tmp_path / "alpha.py").write_text("def target_function():\n    return 42\n")
+        (tmp_path / "beta.txt").write_text("literal target text\n")
+        (tmp_path / "node_modules").mkdir()
+        (tmp_path / "node_modules" / "ignored.py").write_text("target_function()\n")
+        return tmp_path
+
+    def test_tool_name(self, tool):
+        """Should have correct name."""
+        assert tool.name == "file_search"
+
+    def test_tool_parameters(self, tool):
+        """Should have correct parameters schema."""
+        params = tool.parameters
+
+        assert params["type"] == "object"
+        assert "pattern" in params["properties"]
+        assert "glob" in params["properties"]
+        assert "max_results" in params["properties"]
+        assert "pattern" in params["required"]
+
+    @pytest.mark.asyncio
+    async def test_search_finds_matches(self, tool, test_dir):
+        """Should find matching files and line numbers."""
+        result = await tool.execute(
+            pattern="target_function",
+            path=str(test_dir),
+            glob="*.py",
+        )
+
+        assert result["count"] == 1
+        assert result["matches"][0]["line"] == 1
+        assert result["matches"][0]["path"].endswith("alpha.py")
+
+    @pytest.mark.asyncio
+    async def test_search_supports_literal_mode(self, tool, test_dir):
+        """Should support literal searches when regex is false."""
+        result = await tool.execute(
+            pattern="literal target text",
+            path=str(test_dir),
+            glob="*.txt",
+            regex=False,
+        )
+
+        assert result["count"] == 1
+        assert result["matches"][0]["path"].endswith("beta.txt")
+
+    @pytest.mark.asyncio
+    async def test_search_caps_max_results(self, tool, tmp_path):
+        """Should cap large max_results values."""
+        for i in range(100):
+            (tmp_path / f"file_{i}.txt").write_text("needle\n")
+
+        result = await tool.execute(
+            pattern="needle",
+            path=str(tmp_path),
+            max_results=10_000,
+        )
+
+        assert result["count"] == 80
+        assert result["truncated"] is True
+        assert result["max_results"] == 80
+
+    @pytest.mark.asyncio
+    async def test_search_rejects_empty_pattern(self, tool, test_dir):
+        """Should reject empty patterns."""
+        result = await tool.execute(pattern="", path=str(test_dir))
+
+        assert result["error"] is not None
+        assert result["matches"] == []
+
+
 class TestListFilesTool:
     """Tests for list_files tool."""
 
@@ -187,8 +285,8 @@ class TestListFilesTool:
         # Get tools with tmp_path as allowed path for testing
         mock_repl = MagicMock()
         tools = get_builtin_tools(mock_repl, allowed_paths=[tmp_path])
-        # list_files is the third tool (index 2)
-        return tools[2]
+        # list_files is the fourth tool (index 3)
+        return tools[3]
 
     @pytest.fixture
     def test_dir(self, tmp_path):
@@ -248,6 +346,28 @@ class TestListFilesTool:
 
         assert result["count"] == 1
         assert result["truncated"] is True
+
+    @pytest.mark.asyncio
+    async def test_list_caps_large_max_results(self, tool, test_dir):
+        """Should cap large max_results values."""
+        for i in range(120):
+            (test_dir / f"extra_{i}.txt").write_text("content")
+
+        result = await tool.execute(path=str(test_dir), max_results=10_000)
+
+        assert result["count"] == 100
+        assert result["truncated"] is True
+        assert result["max_results"] == 100
+        assert result["limit_capped"] is True
+
+    @pytest.mark.asyncio
+    async def test_list_refuses_broad_recursive_listing(self, tool, test_dir):
+        """Should reject broad recursive repository inventory requests."""
+        result = await tool.execute(path=str(test_dir), pattern="*", recursive=True)
+
+        assert result["error"] is not None
+        assert "broad recursive" in result["error"]
+        assert result["files"] == []
 
     @pytest.mark.asyncio
     async def test_path_not_found(self, tool, tmp_path):

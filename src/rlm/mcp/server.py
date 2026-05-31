@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import time
+from contextlib import redirect_stdout
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -222,6 +224,12 @@ class AgentManager:
                 }
             )
         return results
+
+
+async def _run_agent_stdio_safe(coro: Any) -> Any:
+    """Run an agent task without allowing prints/logs to corrupt MCP stdout."""
+    with redirect_stdout(sys.stderr):
+        return await coro
 
 
 def create_server() -> Server:
@@ -694,19 +702,21 @@ async def _agent_run(
         from rlm.core.config import load_config
         from rlm.core.orchestrator import RLM
 
-        config = load_config()
-        rlm = RLM(config=config)
+        with redirect_stdout(sys.stderr):
+            config = load_config()
+            rlm = RLM(config=config)
 
-        agent_config = AgentConfig(
-            max_iterations=arguments.get("max_iterations", 10),
-            token_budget=arguments.get("token_budget", 50000),
-            cost_limit=arguments.get("cost_limit", 2.0),
-        )
+            agent_config = AgentConfig(
+                max_iterations=arguments.get("max_iterations", 10),
+                token_budget=arguments.get("token_budget", 50000),
+                cost_limit=arguments.get("cost_limit", 2.0),
+            )
 
-        runner = AgentRunner(rlm, agent_config)
-        run_id = str(uuid4())[:8]
+            runner = AgentRunner(rlm, agent_config)
+            run_id = str(uuid4())[:8]
+            run_coro = _run_agent_stdio_safe(runner.run(task))
 
-        agents.start(run_id, task, runner.run(task))
+            agents.start(run_id, task, run_coro)
 
         return CallToolResult(
             content=[

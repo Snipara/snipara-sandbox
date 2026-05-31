@@ -12,6 +12,7 @@ from rlm.mcp.server import (
     Session,
     SessionManager,
     _agent_cancel,
+    _agent_run,
     _agent_status,
     _clear_repl_context,
     _destroy_session,
@@ -699,6 +700,52 @@ class TestDestroySession:
         result = await _destroy_session(mgr, {})
         assert result.isError
         assert "No session_id" in result.content[0].text
+
+
+class TestAgentRunHandler:
+    """Tests for _agent_run handler."""
+
+    @pytest.mark.asyncio
+    async def test_redirects_stdout_noise(self, capsys, monkeypatch):
+        """Agent startup/runtime stdout must not corrupt MCP stdio."""
+        from rlm.core.config import RLMConfig
+
+        def noisy_load_config():
+            print("load config noise")
+            return RLMConfig()
+
+        class NoisyRLM:
+            def __init__(self, *args, **kwargs):
+                print("rlm init noise")
+
+        class NoisyAgentRunner:
+            def __init__(self, *args, **kwargs):
+                print("runner init noise")
+
+            async def run(self, task):
+                print(f"agent run noise: {task}")
+                return "done"
+
+        monkeypatch.setattr("rlm.core.config.load_config", noisy_load_config)
+        monkeypatch.setattr("rlm.core.orchestrator.RLM", NoisyRLM)
+        monkeypatch.setattr("rlm.agent.runner.AgentRunner", NoisyAgentRunner)
+
+        agents = AgentManager()
+        sessions = SessionManager(ttl=60)
+
+        result = await _agent_run(agents, sessions, {"task": "probe"})
+        data = json.loads(result.content[0].text)
+        run = agents.get(data["run_id"])
+        assert run is not None
+        await run.future
+
+        captured = capsys.readouterr()
+        assert not result.isError
+        assert "noise" not in captured.out
+        assert "load config noise" in captured.err
+        assert "rlm init noise" in captured.err
+        assert "runner init noise" in captured.err
+        assert "agent run noise: probe" in captured.err
 
 
 class TestAgentStatusHandler:

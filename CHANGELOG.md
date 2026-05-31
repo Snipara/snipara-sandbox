@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## [2.2.6] - 2026-05-31
+
+### Fixed
+
+- Prevented `snipara_agent_run` from corrupting the MCP stdio transport by
+  redirecting agent startup and runtime stdout noise to stderr. This keeps JSON-RPC
+  frames clean when structlog or other code writes to stdout during agent launch.
+
 ## [2.2.5] - 2026-05-29
 
 ### Added

@@ -15,10 +15,12 @@ npm install @snipara/sandbox
 ```typescript
 import type {
   ExecutePythonParams,
+  ExecutePythonReceipt,
   REPLResult,
   AgentRunParams,
   AgentResult,
   TrustLevel,
+  ExecutionEnvironment,
   ExecutionProfile,
 } from '@snipara/sandbox';
 
@@ -26,9 +28,13 @@ import type {
 const params: ExecutePythonParams = {
   code: 'print(2 + 2)',
   profile: 'default',
+  environment: 'sandbox',
   session_id: 'my-session',
 };
 ```
+
+`execute_python` returns plain-text tool output plus a structured receipt with
+the effective environment, backend, timeout, session id, and resource metrics.
 
 ### Constants & Utilities
 
@@ -61,6 +67,14 @@ console.log(MCP_TOOLS.EXECUTE_PYTHON); // 'execute_python'
 | `sandboxed` | RestrictedPython, safe stdlib only (default) |
 | `docker` | Docker container isolation |
 | `local` | Full access to files, subprocess, network |
+
+## Execution Environments
+
+| Environment | Description |
+|-------------|-------------|
+| `sandbox` | RestrictedPython, safe stdlib only |
+| `docker` | Docker container isolation |
+| `local` | Full local access, gated by `trust_level='local'` |
 
 ## Execution Profiles
 

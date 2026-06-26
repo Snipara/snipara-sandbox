@@ -55,6 +55,10 @@ class TestExecutePython:
         assert not result.isError
         assert len(result.content) == 1
         assert "hello" in result.content[0].text
+        assert result.structuredContent is not None
+        assert result.structuredContent["environment"] == "sandbox"
+        assert result.structuredContent["session_id"] == "default"
+        assert result.structuredContent["success"] is True
 
     @pytest.mark.asyncio
     async def test_execute_python_with_result(self, repl):
@@ -71,6 +75,8 @@ class TestExecutePython:
 
         assert result.isError
         assert "No code provided" in result.content[0].text
+        assert result.structuredContent is not None
+        assert result.structuredContent["error"] == "No code provided"
 
     @pytest.mark.asyncio
     async def test_execute_python_empty_code_whitespace(self, repl):
@@ -113,6 +119,22 @@ class TestExecutePython:
 
         assert not result.isError
         assert "no output" in result.content[0].text.lower()
+
+    @pytest.mark.asyncio
+    async def test_execute_python_receipt_uses_explicit_environment_and_session(self, repl):
+        """Structured receipt should reflect the bound session metadata."""
+        result = await _execute_python(
+            repl,
+            {"code": "result = 1", "profile": "quick"},
+            environment="docker",
+            session_id="bench-1",
+        )
+
+        assert not result.isError
+        assert result.structuredContent is not None
+        assert result.structuredContent["environment"] == "docker"
+        assert result.structuredContent["profile"] == "quick"
+        assert result.structuredContent["session_id"] == "bench-1"
 
 
 class TestGetReplContext:
@@ -314,6 +336,8 @@ class TestExecutePythonEdgeCases:
 
             assert not result.isError
             assert "truncated" in result.content[0].text.lower()
+            assert result.structuredContent is not None
+            assert result.structuredContent["truncated"] is True
 
     @pytest.mark.asyncio
     async def test_execute_python_with_missing_code_key(self, repl):
@@ -397,6 +421,27 @@ class TestSetReplContextEdgeCases:
         assert not result.isError
         context = repl.get_context()
         assert context.get("nothing") is None
+
+    @pytest.mark.asyncio
+    async def test_set_context_surfaces_repl_validation_errors(self):
+        """Should return a tool error when the REPL rejects the value."""
+
+        class RejectingRepl:
+            def get_context(self):
+                return {}
+
+            def set_context(self, key, value):
+                raise ValueError("Context value must be JSON-serializable")
+
+            def clear_context(self):
+                return None
+
+        result = await _set_repl_context(
+            RejectingRepl(), {"key": "bad", "value": '{"nested": true}'}
+        )
+
+        assert result.isError
+        assert "JSON-serializable" in result.content[0].text
 
 
 class TestExecutePythonErrors:
@@ -544,12 +589,12 @@ class TestSessionManager:
 
     def test_destroy_default_resets_it(self):
         mgr = SessionManager(ttl=60)
-        session_before = mgr.get("default")
+        session_before = mgr.get_or_create("default")
         session_before.repl.set_context("x", 1)
         mgr.destroy("default")
         session_after = mgr.get("default")
         assert session_after is not None
-        assert session_after.repl.get_context() == {}
+        assert session_after.repl is None
 
     def test_list_sessions_includes_metadata(self):
         mgr = SessionManager(ttl=60)
@@ -558,6 +603,7 @@ class TestSessionManager:
         assert len(sessions) >= 2  # default + s1
         for s in sessions:
             assert "id" in s
+            assert "environment" in s
             assert "age_seconds" in s
             assert "idle_seconds" in s
             assert "context_keys" in s
@@ -571,6 +617,26 @@ class TestSessionManager:
         assert mgr.get("ephemeral") is None
         # Default should survive
         assert mgr.get("default") is not None
+
+    def test_get_or_create_reuses_bound_session_without_environment(self):
+        mgr = SessionManager(ttl=60)
+        original = mgr.get_or_create("custom", requested_environment="sandbox")
+        reused = mgr.get_or_create("custom")
+        assert reused is original
+        assert reused.environment == "sandbox"
+
+    def test_get_or_create_rejects_environment_switch(self):
+        mgr = SessionManager(ttl=60)
+        mgr.get_or_create("custom", requested_environment="sandbox")
+
+        with pytest.raises(ValueError, match="bound to environment"):
+            mgr.get_or_create("custom", requested_environment="docker")
+
+    def test_get_or_create_requires_local_trust_for_local_environment(self):
+        mgr = SessionManager(ttl=60)
+
+        with pytest.raises(ValueError, match='trust_level = "local"'):
+            mgr.get_or_create("custom", requested_environment="local")
 
 
 # ---------------------------------------------------------------------------

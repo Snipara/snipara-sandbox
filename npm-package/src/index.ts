@@ -24,6 +24,15 @@
 export type ExecutionProfile = 'quick' | 'default' | 'analysis' | 'extended';
 
 /**
+ * Execution environment for MCP-backed Python runs.
+ *
+ * - `sandbox`: RestrictedPython, safe stdlib only
+ * - `docker`: Docker container isolation
+ * - `local`: Full local access, gated by trust_level='local'
+ */
+export type ExecutionEnvironment = 'sandbox' | 'docker' | 'local';
+
+/**
  * Profile configurations with timeout and memory limits.
  */
 export const EXECUTION_PROFILES: Record<ExecutionProfile, { timeout: number; memory: string; description: string }> = {
@@ -76,6 +85,8 @@ export interface ExecutePythonParams {
   timeout?: number;
   /** Execution profile: quick (5s), default (30s), analysis (120s), extended (300s) */
   profile?: ExecutionProfile;
+  /** Execution environment. Omit to use the server config default. */
+  environment?: ExecutionEnvironment;
   /** Session ID for isolated context (default: 'default') */
   session_id?: string;
 }
@@ -171,11 +182,43 @@ export interface REPLResult {
 }
 
 /**
+ * Structured receipt returned by the execute_python MCP tool.
+ */
+export interface ExecutePythonReceipt {
+  /** Effective execution environment */
+  environment: ExecutionEnvironment;
+  /** REPL implementation class name */
+  repl_backend: string;
+  /** Session trust level */
+  trust_level: TrustLevel;
+  /** Execution profile applied to the run */
+  profile: ExecutionProfile | string;
+  /** Effective timeout in seconds */
+  timeout_seconds: number;
+  /** Session identifier */
+  session_id: string;
+  /** Whether execution succeeded */
+  success: boolean;
+  /** Wall-clock execution time */
+  execution_time_ms: number;
+  /** CPU time consumed, when available */
+  cpu_time_ms: number | null;
+  /** Peak memory usage, when available */
+  memory_peak_bytes: number | null;
+  /** Whether tool output was truncated */
+  truncated: boolean;
+  /** Error message for failed runs */
+  error: string | null;
+}
+
+/**
  * Session information.
  */
 export interface SessionInfo {
   /** Session ID */
   id: string;
+  /** Bound execution environment */
+  environment: ExecutionEnvironment | string;
   /** Trust level of the session */
   trust_level: TrustLevel;
   /** Creation timestamp */

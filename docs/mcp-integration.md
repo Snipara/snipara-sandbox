@@ -48,25 +48,22 @@ After editing, restart Claude to load the MCP server.
 
 ### execute_python
 
-Execute Python code in a sandboxed environment using RestrictedPython.
+Execute Python code in a persistent MCP session. Each `session_id` is bound to
+the first execution environment it uses.
 
-**Safe operations:**
-- Math calculations
-- Data processing (json, re, datetime)
-- Collections and algorithms
-- String manipulation
-
-**Blocked operations:**
-- File I/O
-- Network access
-- System calls
-- Subprocess execution
+**Execution environments:**
+- `sandbox`: RestrictedPython, safe stdlib only
+- `docker`: Docker container isolation
+- `local`: Full local access, requires `trust_level = "local"`
 
 **Parameters:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `code` | string | Yes | Python code to execute |
-| `timeout` | integer | No | Timeout in seconds (default: 30, max: 60) |
+| `timeout` | integer | No | Timeout in seconds (default from profile, max: 300) |
+| `profile` | string | No | `quick`, `default`, `analysis`, or `extended` |
+| `environment` | string | No | `sandbox`, `docker`, or `local`. Omit to use the server config default |
+| `session_id` | string | No | Session identifier. A session stays bound to its first environment |
 
 **Example:**
 ```python
@@ -89,6 +86,23 @@ print(result)
 result = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89]
 ```
 
+**Structured receipt:**
+
+`execute_python` also returns structured MCP metadata describing the run:
+
+- `environment`
+- `repl_backend`
+- `trust_level`
+- `profile`
+- `timeout_seconds`
+- `session_id`
+- `success`
+- `execution_time_ms`
+- `cpu_time_ms`
+- `memory_peak_bytes`
+- `truncated`
+- `error`
+
 ### get_repl_context
 
 Get all variables stored in the persistent REPL context from previous `execute_python` calls.
@@ -109,7 +123,7 @@ Clear all variables and reset the REPL to a clean state.
 
 ## Allowed Imports
 
-The sandboxed Python environment allows these safe modules:
+The `sandbox` environment allows these safe modules:
 
 | Category | Modules |
 |----------|---------|
@@ -123,7 +137,7 @@ The sandboxed Python environment allows these safe modules:
 
 ## Blocked Operations
 
-The following are blocked for security:
+The following are blocked in `sandbox` mode for security:
 
 | Category | Examples |
 |----------|----------|

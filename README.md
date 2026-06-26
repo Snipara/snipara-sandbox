@@ -214,7 +214,7 @@ Core MCP tools:
 
 | Tool | Purpose |
 |------|---------|
-| `execute_python` | Execute Python in a sandboxed session |
+| `execute_python` | Execute Python in `sandbox`, `docker`, or `local` sessions |
 | `get_repl_context` | Read persistent session variables |
 | `set_repl_context` | Store persistent session variables |
 | `clear_repl_context` | Reset session state |
@@ -223,6 +223,11 @@ Core MCP tools:
 | `snipara_agent_run` | Start an autonomous agent task |
 | `snipara_agent_status` | Check an agent run |
 | `snipara_agent_cancel` | Cancel an agent run |
+
+`execute_python` accepts an optional `environment` parameter (`sandbox`,
+`docker`, `local`). Each `session_id` stays bound to its first environment, and
+the tool returns a structured MCP receipt with backend, timeout, session, and
+resource metrics.
 
 ## Using Snipara Sandbox With Snipara
 

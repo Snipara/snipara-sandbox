@@ -27,6 +27,7 @@ import sys
 import time
 from contextlib import redirect_stdout
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from mcp.server import Server
@@ -37,12 +38,18 @@ from mcp.types import (
     Tool,
 )
 
-from rlm.core.config import EXECUTION_PROFILES, load_config
+from rlm.core.config import EXECUTION_PROFILES, RLMConfig, load_config
+from rlm.repl.base import BaseREPL
+from rlm.repl.docker import DockerREPL, build_workspace_image
 from rlm.repl.local import LocalREPL
 from rlm.repl.localdev import LocalDevREPL
 
 # Default session TTL: 30 minutes
 DEFAULT_SESSION_TTL = 30 * 60
+SUPPORTED_EXECUTION_ENVIRONMENTS = frozenset({"sandbox", "docker", "local"})
+ENVIRONMENT_ALIASES = {
+    "sandboxed": "sandbox",
+}
 
 
 @dataclass
@@ -50,7 +57,8 @@ class Session:
     """A REPL session with metadata."""
 
     id: str
-    repl: LocalREPL | LocalDevREPL
+    repl: BaseREPL | None = None
+    environment: str | None = None
     trust_level: str = "sandboxed"
     created_at: float = field(default_factory=time.time)
     last_access: float = field(default_factory=time.time)
@@ -67,41 +75,150 @@ class Session:
 class SessionManager:
     """Manages multiple REPL sessions with TTL-based cleanup."""
 
-    def __init__(self, ttl: float = DEFAULT_SESSION_TTL, trust_level: str = "sandboxed"):
+    def __init__(
+        self,
+        ttl: float = DEFAULT_SESSION_TTL,
+        trust_level: str = "sandboxed",
+        environment: str = "local",
+        config: RLMConfig | None = None,
+    ):
         self._sessions: dict[str, Session] = {}
         self._ttl = ttl
-        self._trust_level = trust_level
+        self._config = config
+        self._trust_level = config.trust_level if config is not None else trust_level
+        self._configured_environment = config.environment if config is not None else environment
         self._default_session_id = "default"
-        # Create default session
+        # Create an unbound default session so the first execute_python call can
+        # choose an explicit environment without silently discarding context.
         self._sessions[self._default_session_id] = Session(
             id=self._default_session_id,
-            repl=self._create_repl(),
             trust_level=self._trust_level,
         )
 
-    def _create_repl(self) -> LocalREPL | LocalDevREPL:
-        """Create a REPL based on trust level."""
-        if self._trust_level == "local":
-            return LocalDevREPL(timeout=300, audit_log=True)
-        else:
-            # Default to sandboxed (RestrictedPython)
-            return LocalREPL(timeout=30)
+    def _normalize_environment(self, environment: str) -> str:
+        """Normalize aliases and validate the requested execution environment."""
+        normalized = ENVIRONMENT_ALIASES.get(environment, environment)
+        if normalized not in SUPPORTED_EXECUTION_ENVIRONMENTS:
+            supported = ", ".join(sorted(SUPPORTED_EXECUTION_ENVIRONMENTS))
+            raise ValueError(
+                f"Unknown environment '{environment}'. Supported environments: {supported}"
+            )
+        return normalized
 
-    def get_or_create(self, session_id: str | None = None) -> Session:
+    def _resolve_default_environment(self) -> str:
+        """Resolve the default environment when execute_python omits it."""
+        configured = ENVIRONMENT_ALIASES.get(
+            self._configured_environment, self._configured_environment
+        )
+        if configured == "docker":
+            return "docker"
+        if configured == "local":
+            return "local" if self._trust_level == "local" else "sandbox"
+        if configured == "sandbox":
+            return "sandbox"
+        if configured == "wasm":
+            raise ValueError(
+                "MCP execute_python does not support the 'wasm' environment. "
+                "Use environment='sandbox', 'docker', or 'local'."
+            )
+        if self._trust_level == "docker":
+            return "docker"
+        if self._trust_level == "local":
+            return "local"
+        return "sandbox"
+
+    def _resolve_docker_workdir_mount(self) -> Path | None:
+        """Resolve the host workspace mounted read-only into Docker executions."""
+        if self._config is None:
+            return Path.cwd()
+        if not self._config.docker_mount_workspace:
+            return None
+        mount_path = self._config.docker_workspace_path or Path.cwd()
+        return mount_path.resolve()
+
+    def _resolve_docker_image(self) -> str:
+        """Resolve the Docker image, optionally preparing a workspace image."""
+        if self._config is None:
+            return "python:3.11-slim"
+        setup_mode = self._config.docker_workspace_setup
+        if setup_mode == "none":
+            return self._config.docker_image
+        workspace_path = self._config.docker_workspace_path or Path.cwd()
+        return build_workspace_image(
+            base_image=self._config.docker_image,
+            workspace_path=workspace_path,
+            setup_mode=setup_mode,
+            install_command=self._config.docker_workspace_install_command,
+            install_extras=self._config.docker_workspace_install_extras,
+        )
+
+    def _create_repl(self, environment: str) -> BaseREPL:
+        """Create a REPL for the requested environment."""
+        if environment == "sandbox":
+            return LocalREPL(timeout=30)
+        if environment == "local":
+            if self._trust_level != "local":
+                raise ValueError(
+                    'Local execution requires trust_level = "local" in the Snipara Sandbox config.'
+                )
+            return LocalDevREPL(timeout=300, audit_log=True)
+        if environment == "docker":
+            if self._config is None:
+                return DockerREPL()
+            return DockerREPL(
+                image=self._resolve_docker_image(),
+                cpus=self._config.docker_cpus,
+                memory=self._config.docker_memory,
+                timeout=self._config.docker_timeout,
+                network_disabled=self._config.docker_network_disabled,
+                workdir_mount=self._resolve_docker_workdir_mount(),
+            )
+        supported = ", ".join(sorted(SUPPORTED_EXECUTION_ENVIRONMENTS))
+        raise ValueError(
+            f"Unknown environment '{environment}'. Supported environments: {supported}"
+        )
+
+    def _bind_session(self, session: Session, environment: str) -> None:
+        """Bind a session to an execution environment on first use."""
+        session.environment = environment
+        session.repl = self._create_repl(environment)
+
+    def _release_session(self, session: Session) -> None:
+        """Release any resources held by a session REPL."""
+        if session.repl is None:
+            return
+        cleanup = getattr(session.repl, "cleanup", None)
+        if callable(cleanup):
+            cleanup()
+
+    def get_or_create(
+        self, session_id: str | None = None, requested_environment: str | None = None
+    ) -> Session:
         """Get existing session or create new one."""
         session_id = session_id or self._default_session_id
 
         # Cleanup expired sessions periodically
         self._cleanup_expired()
 
-        if session_id not in self._sessions:
-            self._sessions[session_id] = Session(
-                id=session_id,
-                repl=self._create_repl(),
-                trust_level=self._trust_level,
-            )
+        session = self._sessions.get(session_id)
+        if session is None:
+            session = Session(id=session_id, trust_level=self._trust_level)
+            self._sessions[session_id] = session
 
-        session = self._sessions[session_id]
+        if session.environment is None:
+            environment = self._normalize_environment(
+                requested_environment or self._resolve_default_environment()
+            )
+            self._bind_session(session, environment)
+        elif requested_environment is not None:
+            environment = self._normalize_environment(requested_environment)
+            if session.environment != environment:
+                raise ValueError(
+                    f"Session '{session_id}' is bound to environment '{session.environment}'. "
+                    f"Requested '{environment}'. Use a different session_id or destroy the "
+                    "existing session first."
+                )
+
         session.touch()
         return session
 
@@ -116,13 +233,17 @@ class SessionManager:
         """Destroy a session. Returns True if session existed."""
         if session_id == self._default_session_id:
             # Reset default session instead of destroying
+            self._release_session(self._sessions[self._default_session_id])
             self._sessions[self._default_session_id] = Session(
                 id=self._default_session_id,
-                repl=self._create_repl(),
                 trust_level=self._trust_level,
             )
             return True
-        return self._sessions.pop(session_id, None) is not None
+        session = self._sessions.pop(session_id, None)
+        if session is None:
+            return False
+        self._release_session(session)
+        return True
 
     @property
     def trust_level(self) -> str:
@@ -136,12 +257,16 @@ class SessionManager:
         return [
             {
                 "id": s.id,
+                "environment": s.environment
+                or ENVIRONMENT_ALIASES.get(
+                    self._configured_environment, self._configured_environment
+                ),
                 "trust_level": s.trust_level,
                 "created_at": s.created_at,
                 "last_access": s.last_access,
                 "age_seconds": int(now - s.created_at),
                 "idle_seconds": int(now - s.last_access),
-                "context_keys": list(s.repl.get_context().keys()),
+                "context_keys": list(s.repl.get_context().keys()) if s.repl else [],
             }
             for s in self._sessions.values()
         ]
@@ -154,6 +279,7 @@ class SessionManager:
             if sid != self._default_session_id and s.is_expired(self._ttl)
         ]
         for sid in expired:
+            self._release_session(self._sessions[sid])
             del self._sessions[sid]
 
 
@@ -236,15 +362,14 @@ def create_server() -> Server:
     """Create and configure the MCP server with code sandbox tools."""
     server = Server("SniparaSandbox")
 
-    # Load config to get trust_level
+    # Load config to get trust level and execution environment defaults.
     try:
         config = load_config()
-        trust_level = config.trust_level
     except Exception:
-        trust_level = "sandboxed"
+        config = RLMConfig()
 
     # Session manager for multi-session support
-    sessions = SessionManager(trust_level=trust_level)
+    sessions = SessionManager(config=config)
     agents = AgentManager()
 
     @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
@@ -254,15 +379,17 @@ def create_server() -> Server:
             Tool(
                 name="execute_python",
                 description=(
-                    "Execute Python code in a sandboxed environment. "
-                    "Trust level determines capabilities:\n"
-                    "- sandboxed (default): RestrictedPython, safe stdlib only\n"
-                    "- local: Full access to files, subprocess, network, any library\n\n"
-                    "In sandboxed mode: json, re, math, datetime, collections, itertools allowed. "
+                    "Execute Python code in an isolated session. "
+                    "Choose the environment per call or omit it to use the config default.\n"
+                    "- sandbox: RestrictedPython, safe stdlib only\n"
+                    "- docker: Container isolation with DockerREPL\n"
+                    "- local: Full access to files, subprocess, network, any library "
+                    "(requires trust_level='local')\n\n"
+                    "In sandbox mode: json, re, math, datetime, collections, itertools allowed. "
                     "In local mode: Full Python environment with project libraries.\n\n"
                     "Use 'result = <value>' to return a value. Use print() for output. "
-                    "Context persists across calls. "
-                    "Use session_id for separate contexts. "
+                    "Context persists across calls. A session_id stays bound to the first "
+                    "environment it uses. "
                     "Profiles: quick (5s), default (30s), analysis (120s), extended (300s)."
                 ),
                 inputSchema={
@@ -281,6 +408,14 @@ def create_server() -> Server:
                             "enum": ["quick", "default", "analysis", "extended"],
                             "description": "Execution profile: quick (5s), default (30s), analysis (120s), extended (300s)",
                             "default": "default",
+                        },
+                        "environment": {
+                            "type": "string",
+                            "enum": ["sandbox", "docker", "local"],
+                            "description": (
+                                "Execution environment. Omit to use the server config default. "
+                                "A session_id stays bound to the first environment it uses."
+                            ),
                         },
                         "session_id": {
                             "type": "string",
@@ -502,8 +637,32 @@ def create_server() -> Server:
         session_id = arguments.get("session_id")
 
         if name == "execute_python":
-            session = sessions.get_or_create(session_id)
-            return await _execute_python(session.repl, arguments, session.trust_level)
+            try:
+                session = sessions.get_or_create(
+                    session_id, requested_environment=arguments.get("environment")
+                )
+            except (ImportError, ValueError) as e:
+                return CallToolResult(
+                    content=[TextContent(type="text", text=f"Error: {e}")],
+                    isError=True,
+                )
+            if session.repl is None or session.environment is None:
+                return CallToolResult(
+                    content=[
+                        TextContent(
+                            type="text",
+                            text="Error: Session failed to initialize execution environment",
+                        )
+                    ],
+                    isError=True,
+                )
+            return await _execute_python(
+                session.repl,
+                arguments,
+                session.trust_level,
+                session.environment,
+                session.id,
+            )
 
         elif name == "get_repl_context":
             session = sessions.get_or_create(session_id)
@@ -541,8 +700,44 @@ def create_server() -> Server:
     return server
 
 
+def _build_execution_receipt(
+    *,
+    environment: str,
+    repl: BaseREPL,
+    trust_level: str,
+    profile: str,
+    timeout: int,
+    session_id: str,
+    success: bool,
+    execution_time_ms: int = 0,
+    cpu_time_ms: int | None = None,
+    memory_peak_bytes: int | None = None,
+    truncated: bool = False,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """Build structured receipt metadata for execute_python responses."""
+    return {
+        "environment": environment,
+        "repl_backend": type(repl).__name__,
+        "trust_level": trust_level,
+        "profile": profile,
+        "timeout_seconds": timeout,
+        "session_id": session_id,
+        "success": success,
+        "execution_time_ms": execution_time_ms,
+        "cpu_time_ms": cpu_time_ms,
+        "memory_peak_bytes": memory_peak_bytes,
+        "truncated": truncated,
+        "error": error,
+    }
+
+
 async def _execute_python(
-    repl: LocalREPL | LocalDevREPL, arguments: dict[str, Any], trust_level: str = "sandboxed"
+    repl: BaseREPL,
+    arguments: dict[str, Any],
+    trust_level: str = "sandboxed",
+    environment: str = "sandbox",
+    session_id: str = "default",
 ) -> CallToolResult:
     """Execute Python code in the sandbox or local dev environment."""
     code = arguments.get("code", "")
@@ -556,6 +751,16 @@ async def _execute_python(
     if not code.strip():
         return CallToolResult(
             content=[TextContent(type="text", text="Error: No code provided")],
+            structuredContent=_build_execution_receipt(
+                environment=environment,
+                repl=repl,
+                trust_level=trust_level,
+                profile=profile_name,
+                timeout=timeout,
+                session_id=session_id,
+                success=False,
+                error="No code provided",
+            ),
             isError=True,
         )
 
@@ -566,20 +771,47 @@ async def _execute_python(
         if result.truncated:
             output += "\n... (output truncated)"
         # Add trust level indicator for local mode
-        if trust_level == "local":
+        if environment == "local":
             output = f"[local mode] {output}"
         return CallToolResult(
             content=[TextContent(type="text", text=output)],
+            structuredContent=_build_execution_receipt(
+                environment=environment,
+                repl=repl,
+                trust_level=trust_level,
+                profile=profile_name,
+                timeout=timeout,
+                session_id=session_id,
+                success=True,
+                execution_time_ms=result.execution_time_ms,
+                cpu_time_ms=result.cpu_time_ms,
+                memory_peak_bytes=result.memory_peak_bytes,
+                truncated=result.truncated,
+            ),
         )
     else:
-        error_prefix = "[local mode] " if trust_level == "local" else ""
+        error_prefix = "[local mode] " if environment == "local" else ""
         return CallToolResult(
             content=[TextContent(type="text", text=f"{error_prefix}Error: {result.error}")],
+            structuredContent=_build_execution_receipt(
+                environment=environment,
+                repl=repl,
+                trust_level=trust_level,
+                profile=profile_name,
+                timeout=timeout,
+                session_id=session_id,
+                success=False,
+                execution_time_ms=result.execution_time_ms,
+                cpu_time_ms=result.cpu_time_ms,
+                memory_peak_bytes=result.memory_peak_bytes,
+                truncated=result.truncated,
+                error=result.error,
+            ),
             isError=True,
         )
 
 
-async def _get_repl_context(repl: LocalREPL) -> CallToolResult:
+async def _get_repl_context(repl: BaseREPL) -> CallToolResult:
     """Get the current REPL context."""
     context = repl.get_context()
 
@@ -602,7 +834,7 @@ async def _get_repl_context(repl: LocalREPL) -> CallToolResult:
     )
 
 
-async def _set_repl_context(repl: LocalREPL, arguments: dict[str, Any]) -> CallToolResult:
+async def _set_repl_context(repl: BaseREPL, arguments: dict[str, Any]) -> CallToolResult:
     """Set a variable in the REPL context."""
     key = arguments.get("key", "")
     value_str = arguments.get("value", "")
@@ -619,14 +851,20 @@ async def _set_repl_context(repl: LocalREPL, arguments: dict[str, Any]) -> CallT
         # If not valid JSON, store as string
         value = value_str
 
-    repl.set_context(key, value)
+    try:
+        repl.set_context(key, value)
+    except ValueError as e:
+        return CallToolResult(
+            content=[TextContent(type="text", text=f"Error: {e}")],
+            isError=True,
+        )
 
     return CallToolResult(
         content=[TextContent(type="text", text=f"Set context['{key}'] = {repr(value)}")],
     )
 
 
-async def _clear_repl_context(repl: LocalREPL) -> CallToolResult:
+async def _clear_repl_context(repl: BaseREPL) -> CallToolResult:
     """Clear the REPL context."""
     repl.clear_context()
     return CallToolResult(
@@ -648,9 +886,10 @@ async def _list_sessions(sessions: SessionManager) -> CallToolResult:
     lines.append("")
     for s in session_list:
         context_info = f", context: {s['context_keys']}" if s["context_keys"] else ""
-        trust_indicator = " [LOCAL]" if s["trust_level"] == "local" else ""
+        trust_indicator = " [LOCAL]" if s["environment"] == "local" else ""
         lines.append(
-            f"  - {s['id']}{trust_indicator}: idle {s['idle_seconds']}s, age {s['age_seconds']}s{context_info}"
+            f"  - {s['id']} ({s['environment']}){trust_indicator}: "
+            f"idle {s['idle_seconds']}s, age {s['age_seconds']}s{context_info}"
         )
 
     return CallToolResult(

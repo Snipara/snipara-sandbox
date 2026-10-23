@@ -17,10 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from rlm.validation.artifact_readers import NODE_READER, PYTHON_READER
+from rlm.validation.limits import disk_allocation, require_capabilities
 from rlm.validation.models import SCHEMA, ValidationRequest
 from rlm.validation.paths import secure_path
 from rlm.validation.profiles import probe_script
 from rlm.validation.snapshot import SnapshotCancelledError, capture_bounded
+from rlm.validation.state import StateDirectory, open_run
 
 # Capture operator transport settings before any legacy project dotenv loading.
 CONTROL_ENV = {
@@ -94,24 +96,12 @@ def request_hash(request: ValidationRequest) -> str:
     return hashlib.sha256(canonical(request.model_dump())).hexdigest()
 
 
-def _write(directory: Path, receipt: dict[str, Any]) -> None:
-    target = directory / "receipt.json"
-    temporary = directory / (".receipt-" + uuid.uuid4().hex)
-    temporary.write_bytes(canonical(receipt))
-    temporary.chmod(0o600)
-    temporary.replace(target)
+def _write(directory: StateDirectory, receipt: dict[str, Any]) -> None:
+    directory.write("receipt.json", canonical(receipt))
 
 
-def read_run(store: Path, run_id: str) -> dict[str, Any]:
-    if not RUN_ID.fullmatch(run_id):
-        raise ValueError("invalid run id")
-    store = secure_path(store)
-    target = secure_path(store / run_id / "receipt.json")
-    if target.is_symlink() or target.parent.is_symlink():
-        raise ValueError("symlink receipt refused")
-    if target.stat().st_size > 8 * 1024 * 1024:
-        raise ValueError("receipt exceeds byte budget")
-    value = json.loads(target.read_text())
+def _read_receipt(directory: StateDirectory, run_id: str) -> dict[str, Any]:
+    value = json.loads(directory.read("receipt.json", 8 * 1024 * 1024))
     if (
         not isinstance(value, dict)
         or value.get("schema_version") != SCHEMA
@@ -119,6 +109,13 @@ def read_run(store: Path, run_id: str) -> dict[str, Any]:
     ):
         raise ValueError("receipt schema or run identity mismatch")
     return value
+
+
+def read_run(store: Path, run_id: str) -> dict[str, Any]:
+    if not RUN_ID.fullmatch(run_id):
+        raise ValueError("invalid run id")
+    with open_run(store, run_id) as directory:
+        return _read_receipt(directory, run_id)
 
 
 def diagnose(
@@ -148,7 +145,7 @@ def diagnose(
             cancelled=lambda: cancel_event is not None and cancel_event.is_set(),
         )
         with tempfile.TemporaryDirectory(prefix="snipara-diagnose-") as folder:
-            directory = Path(folder)
+            directory = Path(folder).resolve()
             project = directory / "project"
             project.mkdir()
             probe = request.model_copy(
@@ -188,19 +185,37 @@ def _owned_container(client: Any, receipt: dict[str, Any]) -> Any:
 
 
 def cancel(store: Path, run_id: str, *, client: Any = None) -> dict[str, Any]:
-    receipt = read_run(store, run_id)
-    if receipt["status"] != "running":
-        return {"run_id": run_id, "cancel_requested": False, "status": receipt["status"]}
-    owned = client is None
-    try:
-        client = client or docker_client()
-        container = _owned_container(client, receipt)
-        (store / run_id / "cancel-requested").touch(mode=0o600)
-        container.kill()
-        return {"run_id": run_id, "cancel_requested": True}
-    finally:
-        if owned and client is not None:
-            client.close()
+    if not RUN_ID.fullmatch(run_id):
+        raise ValueError("invalid run id")
+    with open_run(store, run_id) as directory:
+        receipt = _read_receipt(directory, run_id)
+        if receipt["status"] not in {"preparing", "running"}:
+            return {"run_id": run_id, "cancel_requested": False, "status": receipt["status"]}
+        directory.write("cancel-requested", b"")
+        if receipt["status"] == "preparing":
+            return {"run_id": run_id, "cancel_requested": True, "status": "preparing"}
+        owned = client is None
+        try:
+            client = client or docker_client()
+            try:
+                container = _owned_container(client, receipt)
+                container.kill()
+            except Exception as error:
+                from docker.errors import APIError, NotFound
+
+                if isinstance(error, NotFound) or (
+                    isinstance(error, APIError) and error.status_code == 409
+                ):
+                    return {
+                        "run_id": run_id,
+                        "cancel_requested": True,
+                        "live_stop": "already_stopped",
+                    }
+                raise
+            return {"run_id": run_id, "cancel_requested": True}
+        finally:
+            if owned and client is not None:
+                client.close()
 
 
 def _read_file(
@@ -217,9 +232,22 @@ def _read_file(
     argv = (
         ["node", "-e", NODE_READER, *arguments]
         if profile == "node"
-        else ["python", "-c", PYTHON_READER, *arguments]
+        else ["python", "-I", "-c", PYTHON_READER, *arguments]
     )
-    execution = client.api.exec_create(container.id, argv, stdout=True, stderr=False)["Id"]
+    collector_env = {
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "NODE_OPTIONS": "",
+        "NODE_PATH": "",
+        "PYTHONPATH": "",
+        "PYTHONHOME": "",
+        "PYTHONSTARTUP": "",
+        "LD_PRELOAD": "",
+        "LD_LIBRARY_PATH": "",
+        "LD_AUDIT": "",
+    }
+    execution = client.api.exec_create(
+        container.id, argv, stdout=True, stderr=False, environment=collector_env
+    )["Id"]
     stream = client.api.exec_start(execution, stream=True)
     data = bytearray()
     try:
@@ -237,7 +265,7 @@ def _read_file(
 
 
 def _collect(
-    container: Any, directory: Path, paths: list[str], profile: str, client: Any
+    container: Any, directory: StateDirectory, paths: list[str], profile: str, client: Any
 ) -> list[dict[str, Any]]:
     artifacts = []
     total = 0
@@ -245,7 +273,7 @@ def _collect(
         data = _read_file(container, "/work", relative, profile, client, MAX_ARTIFACT_BYTES - total)
         total += len(data)
         name = f"artifact-{index}-0"
-        (directory / name).write_bytes(data)
+        directory.write(name, data)
         artifacts.append(
             {
                 "requested_path": relative,
@@ -258,6 +286,10 @@ def _collect(
 
 
 def _execute(container: Any, client: Any, argv: list[str], deadline: float, cancelled: Any) -> int:
+    if cancelled():
+        raise SnapshotCancelledError("job cancelled before dispatch")
+    if time.monotonic() >= deadline:
+        raise TimeoutError("job deadline exceeded before dispatch")
     execution = client.api.exec_create(container.id, argv)["Id"]
     client.api.exec_start(execution, detach=True)
     while True:
@@ -288,12 +320,12 @@ def run(
         and resolved_store.relative_to(project).parts[0] != ".snipara"
     ):
         raise ValueError("store inside workspace must be under excluded .snipara directory")
-    store.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if store.is_symlink():
-        raise ValueError("symlink store refused")
+    state_root = StateDirectory.open(store, create=True)
     run_id = uuid.uuid4().hex
-    directory = store / run_id
-    directory.mkdir(mode=0o700)
+    try:
+        directory = state_root.child(run_id, create=True)
+    finally:
+        state_root.close()
     receipt: dict[str, Any] = {
         "schema_version": SCHEMA,
         "run_id": run_id,
@@ -307,8 +339,13 @@ def run(
         "artifacts": [],
         "cleanup_complete": False,
         "started_at": time.time(),
+        "owner_pid": os.getpid(),
     }
-    _write(directory, receipt)
+    try:
+        _write(directory, receipt)
+    except BaseException:
+        directory.close()
+        raise
     container = None
     owned = client is None
     started = time.monotonic()
@@ -318,14 +355,17 @@ def run(
 
     def monitor() -> None:
         while not monitor_stop.wait(0.05):
-            reason = (
-                "cancelled"
-                if (
-                    (directory / "cancel-requested").exists()
-                    or (cancel_event is not None and cancel_event.is_set())
+            try:
+                reason = (
+                    "cancelled"
+                    if (
+                        directory.exists("cancel-requested")
+                        or (cancel_event is not None and cancel_event.is_set())
+                    )
+                    else ("timeout" if time.monotonic() >= deadline else "")
                 )
-                else ("timeout" if time.monotonic() >= deadline else "")
-            )
+            except Exception:
+                reason = "error"
             if reason:
                 abort["reason"] = reason
                 if container is not None:
@@ -336,10 +376,23 @@ def run(
                     return
 
     watcher = threading.Thread(target=monitor, daemon=True)
-    watcher.start()
+    try:
+        watcher.start()
+    except BaseException:
+        directory.close()
+        raise
     try:
         client = client or docker_client()
         client.ping()
+        receipt["enforced_capabilities"] = require_capabilities(client)
+        disk = disk_allocation(request)
+        receipt["limits"] = {
+            "cpus": request.cpus,
+            "memory_mb": request.memory_mb,
+            "pids": request.pids,
+            "disk": disk,
+            "timeout_seconds": request.timeout_seconds,
+        }
         image = client.images.get(request.image)
         receipt["image_id"] = image.id
         if image.attrs.get("Config", {}).get("Volumes"):
@@ -353,12 +406,16 @@ def run(
                 Path(request.workspace),
                 snapshot,
                 deadline=deadline,
-                cancelled=lambda: (directory / "cancel-requested").exists()
+                cancelled=lambda: directory.exists("cancel-requested")
                 or (cancel_event is not None and cancel_event.is_set()),
                 workspace_fd=workspace_fd,
             )
             if not (snapshot / request.cwd).is_dir():
                 raise ValueError("cwd missing from snapshot")
+            if directory.exists("cancel-requested") or (
+                cancel_event is not None and cancel_event.is_set()
+            ):
+                raise SnapshotCancelledError("job cancelled during preparation")
             if abort:
                 raise TimeoutError("validation budget expired during preparation")
             # Fixed bootstrap receives positional argv; user strings are never interpolated.
@@ -370,8 +427,8 @@ def run(
                 labels={LABEL: run_id},
                 volumes={str(snapshot): {"bind": "/input", "mode": "ro"}},
                 tmpfs={
-                    "/work": f"rw,exec,nosuid,nodev,size={request.disk_mb}m,mode=1777",
-                    "/tmp": "rw,exec,nosuid,nodev,size=64m,mode=1777",
+                    "/work": f"rw,exec,nosuid,nodev,size={disk['workspace_mb']}m,mode=1777",
+                    "/tmp": f"rw,exec,nosuid,nodev,size={disk['tmp_mb']}m,mode=1777",
                 },
                 read_only=True,
                 user="65534:65534",
@@ -382,6 +439,7 @@ def run(
                 memswap_limit=f"{request.memory_mb}m",
                 nano_cpus=int(request.cpus * 1_000_000_000),
                 pids_limit=request.pids,
+                shm_size=disk["shm_mb"] * 1024 * 1024,
                 environment={
                     "HOME": "/tmp",
                     "XDG_CACHE_HOME": "/tmp/cache",
@@ -396,7 +454,7 @@ def run(
             container.start()
 
             def cancelled() -> bool:
-                return (directory / "cancel-requested").exists() or (
+                return directory.exists("cancel-requested") or (
                     cancel_event is not None and cancel_event.is_set()
                 )
 
@@ -441,9 +499,13 @@ def run(
                         truncate=True,
                     )
                     receipt["logs_truncated"] = len(output) > MAX_LOG
-                    log = redact(output[:MAX_LOG].decode("utf-8", errors="replace"))
-                    (directory / "output.log").write_text(log)
-                    receipt["log_sha256"] = hashlib.sha256(log.encode()).hexdigest()
+                    encoded = redact(output[:MAX_LOG].decode("utf-8", errors="replace")).encode(
+                        "utf-8"
+                    )
+                    receipt["logs_truncated"] = receipt["logs_truncated"] or len(encoded) > MAX_LOG
+                    final_log = encoded[:MAX_LOG].decode("utf-8", errors="ignore").encode("utf-8")
+                    directory.write("output.log", final_log)
+                    receipt["log_sha256"] = hashlib.sha256(final_log).hexdigest()
                 except Exception as error:
                     receipt["log_error"] = redact(str(error))[:2000]
                     if receipt["status"] == "passed":
@@ -466,7 +528,7 @@ def run(
     except Exception as error:
         receipt.update(
             status=abort.get("reason")
-            or ("cancelled" if (directory / "cancel-requested").exists() else "error"),
+            or ("cancelled" if directory.exists("cancel-requested") else "error"),
             error=redact(str(error))[:2000],
         )
     except KeyboardInterrupt:
@@ -488,9 +550,12 @@ def run(
             receipt["status"] = abort["reason"]
         receipt["duration_ms"] = int((time.monotonic() - started) * 1000)
         receipt["finished_at"] = time.time()
-        _write(directory, receipt)
-        if owned and client is not None:
-            client.close()
+        try:
+            _write(directory, receipt)
+        finally:
+            directory.close()
+            if owned and client is not None:
+                client.close()
     return receipt
 
 
@@ -503,8 +568,30 @@ def verify(
     workspace_fd: int | None = None,
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
+    if not RUN_ID.fullmatch(run_id):
+        raise ValueError("invalid run id")
+    with open_run(store, run_id) as directory:
+        return _verify(
+            request,
+            directory,
+            run_id,
+            client=client,
+            workspace_fd=workspace_fd,
+            cancel_event=cancel_event,
+        )
+
+
+def _verify(
+    request: ValidationRequest,
+    store: StateDirectory,
+    run_id: str,
+    *,
+    client: Any = None,
+    workspace_fd: int | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
     """Revalidate historical proof, never imply a live process was restored."""
-    receipt = read_run(store, run_id)
+    receipt = _read_receipt(store, run_id)
     reasons = []
     if receipt["request_sha256"] != request_hash(request):
         reasons.append("request_changed")
@@ -531,19 +618,17 @@ def verify(
         if not re.fullmatch(r"artifact-\d+-\d+", name):
             reasons.append("artifact_path_invalid")
             continue
-        path = store / run_id / name
-        if (
-            path.is_symlink()
-            or not path.is_file()
-            or hashlib.sha256(path.read_bytes()).hexdigest() != artifact["sha256"]
-        ):
+        try:
+            data = store.read(name, MAX_ARTIFACT_BYTES)
+            if hashlib.sha256(data).hexdigest() != artifact["sha256"]:
+                reasons.append("artifact_changed")
+        except (OSError, ValueError):
             reasons.append("artifact_changed")
-    log = store / run_id / "output.log"
-    if (
-        log.is_symlink()
-        or not log.is_file()
-        or hashlib.sha256(log.read_bytes()).hexdigest() != receipt.get("log_sha256")
-    ):
+    try:
+        log = store.read("output.log", MAX_LOG)
+        if hashlib.sha256(log).hexdigest() != receipt.get("log_sha256"):
+            reasons.append("log_changed")
+    except (OSError, ValueError):
         reasons.append("log_changed")
     if [item.get("requested_path") for item in receipt.get("artifacts", [])] != request.artifacts:
         reasons.append("artifacts_incomplete")
@@ -559,9 +644,9 @@ def verify(
     }
 
 
-def recover(store: Path, run_id: str, *, client: Any = None) -> dict[str, Any]:
+def _recover(store: StateDirectory, run_id: str, *, client: Any = None) -> dict[str, Any]:
     """Explicit recovery after owner process loss; never sweep unrelated resources."""
-    receipt = read_run(store, run_id)
+    receipt = _read_receipt(store, run_id)
     if receipt["status"] not in {"preparing", "running"} and receipt.get("cleanup_complete"):
         return receipt
     owned = client is None
@@ -590,8 +675,15 @@ def recover(store: Path, run_id: str, *, client: Any = None) -> dict[str, Any]:
             if snapshot.exists():
                 shutil.rmtree(snapshot)
         receipt.update(status="interrupted", cleanup_complete=True, recovered_at=time.time())
-        _write(store / run_id, receipt)
+        _write(store, receipt)
         return receipt
     finally:
         if owned and client is not None:
             client.close()
+
+
+def recover(store: Path, run_id: str, *, client: Any = None) -> dict[str, Any]:
+    if not RUN_ID.fullmatch(run_id):
+        raise ValueError("invalid run id")
+    with open_run(store, run_id) as directory:
+        return _recover(directory, run_id, client=client)

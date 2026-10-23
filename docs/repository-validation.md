@@ -59,19 +59,22 @@ isolation evidence.
 
 Inputs are copied from a filtered snapshot including authorized uncommitted
 files, not just a commit. `.git`, `.snipara`, environments, common credential
-files, keys and generated dependencies are excluded. All symlinks and special
+files, keys and generated dependencies are excluded. All symlinks, hardlinks and special
 files in included sources are refused. Do not keep credentials in ordinary source
 files; the filtering policy cannot identify all private content automatically.
 Snapshots preserve empty directories and normalize copied permissions for the
 container user, independently of host umask. Streaming descriptor traversal runs
 in a disposable helper so source I/O can be cancelled or timed out.
 Sources are immutable inputs; commands write only to the disposable `/work` and
-`/tmp`. Containers are non-root, network-off, capability-free, with memory,
+`/tmp` and `/dev/shm`. Their combined writable capacity is bounded by the
+request disk budget. Required Linux daemon CPU, memory, PID and swap support
+is checked before dispatch. Containers are non-root, network-off, capability-free, with memory,
 CPU, PID, tmpfs disk and output limits. Docker's daemon is trusted local
 infrastructure; this is not a qualification for hostile shared multi-tenancy.
 
 The durable store must be outside the input tree or beneath its excluded
-`.snipara` directory. Protect it as local operator state. Receipts identify exact
+`.snipara` directory. Protect it as local operator state. State access stays bound to directory
+descriptors, including when an ancestor is replaced during a run. Receipts identify exact
 source bytes/modes and exclusions, request and command hashes, resolved image,
 runtime versions, exit status, output and artifacts. Verify rechecks these inputs
 and artifact/log bytes. Receipts are local runtime observations, not signed

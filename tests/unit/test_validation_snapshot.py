@@ -138,3 +138,21 @@ def test_slow_capture_helper_is_killed_at_deadline(tmp_path, monkeypatch):
     with pytest.raises(TimeoutError):
         snapshots.capture_bounded(tmp_path, deadline=started + 0.2)
     assert time.monotonic() - started < 3
+
+
+def test_source_hardlinks_and_recognizable_credentials_are_refused(tmp_path):
+    import os
+
+    outside = tmp_path / "outside"
+    outside.write_text("synthetic-private")
+    project = tmp_path / "project"
+    project.mkdir()
+    os.link(outside, project / "ordinary.txt")
+    with pytest.raises(ValueError):
+        capture(project)
+    (project / "ordinary.txt").unlink()
+    for folder in [".docker", ".kube"]:
+        (project / folder).mkdir()
+        (project / folder / "config.json").write_text("private")
+    (project / "secrets.yml").write_text("private")
+    assert capture(project)["files"] == []

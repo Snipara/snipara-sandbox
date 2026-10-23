@@ -300,3 +300,39 @@ def test_real_missing_log_is_not_accepted_and_empty_cwd_is_preserved(tmp_path):
         tmp_path / "runs",
     )
     assert empty["status"] == "passed", empty
+
+
+def test_real_python_startup_hook_cannot_replace_trusted_collector(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "sitecustomize.py").write_text(
+        "import sys,os\nif sys.argv[0]=='-c':\n print('FORGED COLLECTOR');os._exit(0)\n"
+    )
+    (project / "check.py").write_text(
+        "from pathlib import Path\nPath('report.txt').write_text('real artifact')\n"
+    )
+    request = ValidationRequest(
+        workspace=str(project),
+        argv=["python", "check.py"],
+        image=os.environ.get("SNIPARA_STARTUP_IMAGE", "snipara-sandbox-startup-control:20261023"),
+        artifacts=["report.txt"],
+    )
+    result = run(request, tmp_path / "runs")
+    assert result["status"] == "passed", result
+    assert (
+        tmp_path / "runs" / result["run_id"] / result["artifacts"][0]["name"]
+    ).read_text() == "real artifact"
+
+
+def test_real_final_log_bytes_stay_bounded_after_redaction(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "check.py").write_text(
+        "import sys\nsys.stdout.buffer.write(b'token=x '*8000+b'\\xff'*1000)\n"
+    )
+    request = ValidationRequest(
+        workspace=str(project), argv=["python", "check.py"], image="python:3.11-slim"
+    )
+    result = run(request, tmp_path / "runs")
+    assert result["status"] == "passed" and result["logs_truncated"], result
+    assert (tmp_path / "runs" / result["run_id"] / "output.log").stat().st_size <= 65536

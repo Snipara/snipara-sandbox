@@ -24,6 +24,12 @@ EXCLUDED_DIRS = frozenset(
         ".aws",
         ".azure",
         ".config",
+        ".docker",
+        ".kube",
+        ".gnupg",
+        ".gcloud",
+        ".npm",
+        ".terraform",
         ".codex",
         ".claude",
         ".cache",
@@ -53,6 +59,11 @@ SECRET_NAMES = frozenset(
         "secrets.json",
         "secrets.toml",
         "secrets.yaml",
+        "secrets.yml",
+        "credentials.yml",
+        "credentials.yaml",
+        "credentials.toml",
+        "service-account.json",
     }
 )
 MAX_FILES = 20000
@@ -150,7 +161,7 @@ def capture(
                         "rb",
                     ) as source:
                         held = os.fstat(source.fileno())
-                        if not stat.S_ISREG(held.st_mode):
+                        if not stat.S_ISREG(held.st_mode) or held.st_nlink != 1:
                             raise ValueError("non-regular source refused")
                         data = source.read(MAX_BYTES - total + 1)
                     total += len(data)

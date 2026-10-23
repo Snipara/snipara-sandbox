@@ -11,6 +11,7 @@ from typing import Any
 from rlm.validation.models import ValidationRequest
 from rlm.validation.paths import secure_path
 from rlm.validation.runner import canonical, diagnose
+from rlm.validation.state import StateDirectory
 
 PROMPT = "Snipara Sandbox n'est pas disponible pour ces tests. Souhaitez-vous utiliser un autre environnement, installer/configurer Sandbox, ou continuer sans Sandbox ?"
 CHOICES = ["alternative", "install", "local", "skip"]
@@ -56,11 +57,8 @@ def record_choice(
         "expires_at": time.time() + 86400,
     }
     path = secure_path(choice_path(request, scope))
-    if path.parent.is_symlink() or (path.parent.parent).is_symlink() or path.is_symlink():
-        raise ValueError("symlink decision store refused")
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path.write_bytes(canonical(value))
-    path.chmod(0o600)
+    with StateDirectory.open(path.parent, create=True) as directory:
+        directory.write(path.name, canonical(value))
     return value
 
 
@@ -70,16 +68,17 @@ def gate(
     identity = scope_identity(request, scope)
     path = secure_path(choice_path(request, scope))
     choice = None
-    if path.exists():
-        if path.is_symlink() or path.parent.is_symlink():
-            raise ValueError("symlink decision store refused")
-        value = json.loads(path.read_text())
+    try:
+        with StateDirectory.open(path.parent) as directory:
+            value = json.loads(directory.read(path.name, 65536))
         if (
             value.get("scope_sha256") == identity
             and value.get("expires_at", 0) > time.time()
             and value.get("choice") in CHOICES
         ):
             choice = value
+    except FileNotFoundError:
+        pass
     # A saved choice remains visible even if readiness changes; do not switch environments silently.
     if choice and choice["choice"] in {"local", "alternative", "skip"}:
         return {

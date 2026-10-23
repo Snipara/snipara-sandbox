@@ -175,3 +175,24 @@ def test_missing_requested_artifact_cannot_verify_as_a_pass(tmp_path):
         "artifacts_incomplete"
         in verify(request, tmp_path / "runs", run_id, client=client)["reasons"]
     )
+
+
+def test_public_cancel_preparing_persists_before_docker_exists(tmp_path):
+    from rlm.validation.runner import cancel
+
+    run_id = "d" * 32
+    directory = tmp_path / run_id
+    directory.mkdir()
+    (directory / "receipt.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "snipara.sandbox.validation.v1",
+                "run_id": run_id,
+                "status": "preparing",
+            }
+        )
+    )
+    client = Mock()
+    assert cancel(tmp_path, run_id, client=client)["cancel_requested"] is True
+    assert (directory / "cancel-requested").exists()
+    client.containers.get.assert_not_called()

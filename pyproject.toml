@@ -76,6 +76,8 @@ exclude = [
     "/.github",
     "/.claude",
     "/.snipara",
+    "**/node_modules",
+    "/npm-package/dist",
     "/tests",
     "/AGENTS.md",
     "/CLAUDE.md",

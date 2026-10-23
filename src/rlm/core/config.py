@@ -280,7 +280,7 @@ def load_project_env(base_dir: Path | None = None, override: bool = False) -> Pa
     return None
 
 
-def load_config(config_path: Path | None = None) -> RLMConfig:
+def load_config(config_path: Path | None = None, *, project_env: bool = True) -> RLMConfig:
     """Load configuration from file and environment.
 
     Priority (highest to lowest):
@@ -298,7 +298,8 @@ def load_config(config_path: Path | None = None) -> RLMConfig:
 
     # Load project-level `.env` support explicitly so the CLI works without
     # requiring python-dotenv to be installed.
-    load_project_env(config_path.parent if config_path else Path.cwd())
+    if project_env:
+        load_project_env(config_path.parent if config_path else Path.cwd())
 
     # Try to load from config file. Prefer the Snipara Sandbox filename while
     # continuing to read rlm.toml for existing projects.
@@ -325,7 +326,7 @@ def load_config(config_path: Path | None = None) -> RLMConfig:
             except ImportError:
                 pass  # No TOML library available, use defaults
 
-    return RLMConfig(**config_data)
+    return RLMConfig(_env_file=".env" if project_env else None, **config_data)
 
 
 def save_config(config: RLMConfig, config_path: Path) -> None:

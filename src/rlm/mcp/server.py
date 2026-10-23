@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 from contextlib import redirect_stdout
@@ -49,6 +50,10 @@ from rlm.validation.mcp import validation_tools
 
 # Default session TTL: 30 minutes
 DEFAULT_SESSION_TTL = 30 * 60
+VALIDATION_ROOT = Path(
+    os.environ.get("SNIPARA_SANDBOX_VALIDATION_WORKSPACE") or Path.cwd()
+).resolve()
+VALIDATION_ENABLED = os.environ.get("SNIPARA_SANDBOX_VALIDATION_ENABLED", "1") == "1"
 SUPPORTED_EXECUTION_ENVIRONMENTS = frozenset({"sandbox", "docker", "local"})
 ENVIRONMENT_ALIASES = {
     "sandboxed": "sandbox",
@@ -366,12 +371,10 @@ def create_server() -> Server:
     server = Server("SniparaSandbox")
 
     # Load config to get trust level and execution environment defaults.
-    validation_config_error = False
     try:
-        config = load_config()
+        config = load_config(project_env=False)
     except Exception:
-        validation_config_error = True
-        config = RLMConfig()
+        config = RLMConfig(_env_file=None)
 
     # Session manager for multi-session support
     sessions = SessionManager(config=config)
@@ -643,7 +646,7 @@ def create_server() -> Server:
         session_id = arguments.get("session_id")
 
         if name in VALIDATION_NAMES:
-            if validation_config_error or not config.docker_mount_workspace:
+            if not VALIDATION_ENABLED:
                 return CallToolResult(
                     content=[
                         TextContent(
@@ -653,9 +656,7 @@ def create_server() -> Server:
                     ],
                     isError=True,
                 )
-            return await handle_validation(
-                name, arguments, config.docker_workspace_path or Path.cwd()
-            )
+            return await handle_validation(name, arguments, VALIDATION_ROOT)
 
         if name == "execute_python":
             try:
@@ -963,7 +964,7 @@ async def _agent_run(
         from rlm.core.orchestrator import RLM
 
         with redirect_stdout(sys.stderr):
-            config = load_config()
+            config = load_config(project_env=False)
             rlm = RLM(config=config)
 
             agent_config = AgentConfig(

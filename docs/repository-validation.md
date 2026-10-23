@@ -62,6 +62,9 @@ files, not just a commit. `.git`, `.snipara`, environments, common credential
 files, keys and generated dependencies are excluded. All symlinks and special
 files in included sources are refused. Do not keep credentials in ordinary source
 files; the filtering policy cannot identify all private content automatically.
+Snapshots preserve empty directories and normalize copied permissions for the
+container user, independently of host umask. Streaming descriptor traversal runs
+in a disposable helper so source I/O can be cancelled or timed out.
 Sources are immutable inputs; commands write only to the disposable `/work` and
 `/tmp`. Containers are non-root, network-off, capability-free, with memory,
 CPU, PID, tmpfs disk and output limits. Docker's daemon is trusted local
@@ -83,7 +86,9 @@ automatic; never run global container cleanup.
 
 MCP exposes `validation_diagnose`, `validation_run`, `validation_status`,
 `validation_verify`, `validation_cancel`, and `validation_recover`. Repository access is confined to
-`docker_workspace_path` from operator config, or the server's working directory.
+`SNIPARA_SANDBOX_VALIDATION_WORKSPACE` from the operator launch environment, or
+the server's working directory. Project dotenv files cannot select the daemon
+or enlarge this validation root. The root is pinned through directory descriptors.
 No client-supplied arbitrary host root is accepted. Reload a native client after
 upgrading to load the new schemas. Existing `execute_python` sessions and their
 REPL backends remain separate; use repository validation for the lifecycle and

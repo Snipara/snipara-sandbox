@@ -145,7 +145,7 @@ def test_real_fifo_collection_deadline_and_image_volume_refusal(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
     (project / "check.py").write_text(
-        "import os\nos.unlink('/tmp/runtime-versions')\nos.mkfifo('/tmp/runtime-versions')\n"
+        "import os\nos.unlink('/tmp/validation-output')\nos.mkfifo('/tmp/validation-output')\n"
     )
     request = ValidationRequest(
         workspace=str(project),
@@ -154,7 +154,9 @@ def test_real_fifo_collection_deadline_and_image_volume_refusal(tmp_path):
         timeout_seconds=2,
     )
     result = run(request, tmp_path / "runs")
-    assert result["status"] == "timeout" and result["cleanup_complete"], result
+    assert result["status"] in {"timeout", "collection_error"} and result["cleanup_complete"], (
+        result
+    )
     assert result["duration_ms"] < 15000
     volume_image = os.environ.get("SNIPARA_VOLUME_IMAGE")
     if volume_image:
@@ -281,3 +283,20 @@ def test_real_artifact_links_and_missing_outputs_are_refused(
     assert escaped["status"] == "artifact_error" and escaped["artifacts"] == [], escaped
     missing = run(request.model_copy(update={"artifacts": ["missing.txt"]}), tmp_path / "runs")
     assert missing["status"] == "artifact_error" and missing["artifacts"] == [], missing
+
+
+def test_real_missing_log_is_not_accepted_and_empty_cwd_is_preserved(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "empty").mkdir()
+    (project / "check.py").write_text("import os\nos.unlink('/tmp/validation-output')")
+    request = ValidationRequest(
+        workspace=str(project), argv=["python", "check.py"], image="python:3.11-slim"
+    )
+    result = run(request, tmp_path / "runs")
+    assert result["status"] == "collection_error", result
+    empty = run(
+        request.model_copy(update={"cwd": "empty", "argv": ["python", "--version"]}),
+        tmp_path / "runs",
+    )
+    assert empty["status"] == "passed", empty

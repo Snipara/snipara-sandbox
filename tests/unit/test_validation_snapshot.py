@@ -71,3 +71,70 @@ def test_unreadable_subtree_is_fatal_not_a_reduced_snapshot(tmp_path):
             capture(tmp_path)
     finally:
         hidden.chmod(0o700)
+
+
+def test_empty_directories_and_umask_are_part_of_normalized_snapshot(tmp_path):
+    import os
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "empty").mkdir()
+    original = capture(project)
+    assert "empty" in [item["path"] for item in original["directories"]]
+    target = tmp_path / "copy"
+    previous = os.umask(0o077)
+    try:
+        capture(project, target)
+    finally:
+        os.umask(previous)
+    assert (target / "empty").is_dir()
+    assert (target / "empty").stat().st_mode & 0o777 == 0o755
+    (project / "empty").rmdir()
+    assert capture(project)["sha256"] != original["sha256"]
+
+
+def test_descriptor_capture_cannot_follow_replaced_ancestor(tmp_path):
+    import os
+
+    from rlm.validation.snapshot import pin_directory
+
+    root = tmp_path / "root"
+    root.mkdir()
+    child = root / "child"
+    child.mkdir()
+    (child / "source").write_text("authorized")
+    fd = pin_directory(child, root=root)
+    child.rename(tmp_path / "moved")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private").write_text("not authorized")
+    child.symlink_to(outside, target_is_directory=True)
+    try:
+        assert [item["path"] for item in capture(child, workspace_fd=fd)["files"]] == ["source"]
+    finally:
+        os.close(fd)
+
+
+def test_capture_worker_honors_cancel_and_deadline(tmp_path):
+    import time
+
+    from rlm.validation.snapshot import SnapshotCancelledError, capture_bounded
+
+    with pytest.raises(TimeoutError):
+        capture_bounded(tmp_path, deadline=time.monotonic() - 1)
+    with pytest.raises(SnapshotCancelledError):
+        capture_bounded(tmp_path, deadline=time.monotonic() + 10, cancelled=lambda: True)
+
+
+def test_slow_capture_helper_is_killed_at_deadline(tmp_path, monkeypatch):
+    import time
+
+    import rlm.validation.snapshot as snapshots
+
+    helper = tmp_path / "owned-slow-helper.py"
+    helper.write_text("import time\ndef capture(*args,**kwargs):\n time.sleep(30)\n return {}\n")
+    monkeypatch.setattr(snapshots, "__file__", str(helper))
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        snapshots.capture_bounded(tmp_path, deadline=started + 0.2)
+    assert time.monotonic() - started < 3

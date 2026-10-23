@@ -293,7 +293,8 @@ def main(
     ),
 ) -> None:
     """Top-level CLI callback."""
-    _load_project_env()
+    if ctx.invoked_subcommand not in {"validation", "mcp-serve"} and not version:
+        _load_project_env()
 
     if version:
         console.print(_version_string())

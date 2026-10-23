@@ -34,3 +34,37 @@ async def test_mcp_rejects_other_workspace_before_execution(tmp_path):
         )
     assert result.isError
     execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_mcp_worker_receives_pinned_source_identity(tmp_path):
+    from rlm.validation.snapshot import capture
+
+    root = tmp_path / "root"
+    root.mkdir()
+    source = root / "source"
+    source.mkdir()
+    (source / "allowed").write_text("yes")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private").write_text("no")
+
+    def execute(request, store, *, cancel_event, workspace_fd):
+        source.rename(tmp_path / "moved")
+        source.symlink_to(outside, target_is_directory=True)
+        snapshot = capture(source, workspace_fd=workspace_fd)
+        return {"status": "passed", "files": [item["path"] for item in snapshot["files"]]}
+
+    with patch("rlm.validation.mcp.run", side_effect=execute):
+        result = await handle(
+            "validation_run",
+            {
+                "request": {
+                    "workspace": str(source),
+                    "argv": ["python", "test.py"],
+                    "image": "python:local",
+                }
+            },
+            root,
+        )
+    assert result.structuredContent["files"] == ["allowed"]

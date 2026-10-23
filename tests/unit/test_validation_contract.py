@@ -61,3 +61,45 @@ def test_cpu_quota_cannot_round_to_unlimited(cpus):
 
 def test_minimum_cpu_quota_stays_positive():
     assert int(request(cpus=0.01).cpus * 1_000_000_000) == 10_000_000
+
+
+def test_validation_cli_does_not_load_project_dotenv(tmp_path):
+    from unittest.mock import patch
+
+    from typer.testing import CliRunner
+
+    from rlm.cli.main import app
+
+    request_file = tmp_path / "request.json"
+    request_file.write_text(request().model_dump_json())
+    with (
+        patch("rlm.cli.main._load_project_env") as load_env,
+        patch("rlm.validation.environment.gate", return_value={"status": "needs_user_choice"}),
+    ):
+        result = CliRunner().invoke(
+            app, ["validation", "gate", "--request", str(request_file), "--scope", "lot"]
+        )
+    assert result.exit_code == 2, result.output
+    load_env.assert_not_called()
+
+
+def test_mcp_config_does_not_import_repository_environment(tmp_path, monkeypatch):
+    import os
+
+    from rlm.core.config import load_config
+
+    monkeypatch.chdir(tmp_path)
+    for name in [
+        "DOCKER_HOST",
+        "SNIPARA_SANDBOX_VALIDATION_WORKSPACE",
+        "RLM_TRUST_LEVEL",
+        "SNIPARA_SANDBOX_TRUST_LEVEL",
+    ]:
+        monkeypatch.delenv(name, raising=False)
+    (tmp_path / ".env").write_text(
+        "DOCKER_HOST=tcp://untrusted.invalid:2375\nSNIPARA_SANDBOX_VALIDATION_WORKSPACE=/\nRLM_TRUST_LEVEL=local\n"
+    )
+    config = load_config(project_env=False)
+    assert config.trust_level == "sandboxed"
+    assert "DOCKER_HOST" not in os.environ
+    assert "SNIPARA_SANDBOX_VALIDATION_WORKSPACE" not in os.environ

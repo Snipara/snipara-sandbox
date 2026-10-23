@@ -776,7 +776,8 @@ class TestAgentRunHandler:
         """Agent startup/runtime stdout must not corrupt MCP stdio."""
         from rlm.core.config import RLMConfig
 
-        def noisy_load_config():
+        def noisy_load_config(*, project_env=True):
+            assert project_env is False
             print("load config noise")
             return RLMConfig()
 

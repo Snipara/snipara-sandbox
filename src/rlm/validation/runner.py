@@ -20,7 +20,24 @@ from rlm.validation.artifact_readers import NODE_READER, PYTHON_READER
 from rlm.validation.models import SCHEMA, ValidationRequest
 from rlm.validation.paths import secure_path
 from rlm.validation.profiles import probe_script
-from rlm.validation.snapshot import capture
+from rlm.validation.snapshot import SnapshotCancelledError, capture_bounded
+
+# Capture operator transport settings before any legacy project dotenv loading.
+CONTROL_ENV = {
+    key: value
+    for key, value in os.environ.items()
+    if key
+    in {
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "DOCKER_HOST",
+        "DOCKER_CONTEXT",
+        "DOCKER_CONFIG",
+    }
+}
 
 LABEL = "com.snipara.sandbox.validation"
 MAX_LOG = 65536
@@ -32,16 +49,25 @@ def docker_client() -> Any:
     """Honor Docker's selected context without loading project secrets."""
     import docker
 
-    if os.environ.get("DOCKER_HOST"):
-        return docker.from_env(timeout=10)
+    if CONTROL_ENV.get("DOCKER_HOST"):
+        host = CONTROL_ENV["DOCKER_HOST"]
+        if not host.startswith("unix://"):
+            raise ValueError(
+                "repository validation currently qualifies local Unix Docker sockets only"
+            )
+        return docker.DockerClient(base_url=host, timeout=10)
     result = subprocess.run(
         ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
         capture_output=True,
         text=True,
         timeout=5,
         check=True,
+        env=CONTROL_ENV,
     )
-    return docker.DockerClient(base_url=result.stdout.strip(), timeout=10)
+    host = result.stdout.strip()
+    if not host.startswith("unix://"):
+        raise ValueError("repository validation currently qualifies local Unix Docker sockets only")
+    return docker.DockerClient(base_url=host, timeout=10)
 
 
 def redact(value: str) -> str:
@@ -95,7 +121,13 @@ def read_run(store: Path, run_id: str) -> dict[str, Any]:
     return value
 
 
-def diagnose(request: ValidationRequest, *, client: Any = None) -> dict[str, Any]:
+def diagnose(
+    request: ValidationRequest,
+    *,
+    client: Any = None,
+    workspace_fd: int | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
     """Check daemon, image and project, never install or run local commands."""
     report: dict[str, Any] = {
         "schema_version": SCHEMA,
@@ -109,7 +141,12 @@ def diagnose(request: ValidationRequest, *, client: Any = None) -> dict[str, Any
         client = client or docker_client()
         client.ping()
         image = client.images.get(request.image)
-        capture(Path(request.workspace))
+        capture_bounded(
+            Path(request.workspace),
+            deadline=time.monotonic() + min(request.timeout_seconds, 10),
+            workspace_fd=workspace_fd,
+            cancelled=lambda: cancel_event is not None and cancel_event.is_set(),
+        )
         with tempfile.TemporaryDirectory(prefix="snipara-diagnose-") as folder:
             directory = Path(folder)
             project = directory / "project"
@@ -123,7 +160,7 @@ def diagnose(request: ValidationRequest, *, client: Any = None) -> dict[str, Any
                     "timeout_seconds": min(request.timeout_seconds, 10),
                 }
             )
-            checked = run(probe, directory / "runs", client=client)
+            checked = run(probe, directory / "runs", client=client, cancel_event=cancel_event)
             report.update(
                 status="ready" if checked["status"] == "passed" else "incompatible",
                 ready=checked["status"] == "passed",
@@ -166,32 +203,46 @@ def cancel(store: Path, run_id: str, *, client: Any = None) -> dict[str, Any]:
             client.close()
 
 
+def _read_file(
+    container: Any,
+    root: str,
+    relative: str,
+    profile: str,
+    client: Any,
+    limit: int,
+    *,
+    truncate: bool = False,
+) -> bytes:
+    arguments = [root, relative, str(limit), "truncate" if truncate else "complete"]
+    argv = (
+        ["node", "-e", NODE_READER, *arguments]
+        if profile == "node"
+        else ["python", "-c", PYTHON_READER, *arguments]
+    )
+    execution = client.api.exec_create(container.id, argv, stdout=True, stderr=False)["Id"]
+    stream = client.api.exec_start(execution, stream=True)
+    data = bytearray()
+    try:
+        for chunk in stream:
+            data.extend(chunk)
+            if len(data) > limit + int(truncate):
+                raise ValueError("file export exceeds byte budget")
+    finally:
+        with suppress(OSError):
+            stream.close()
+    state = client.api.exec_inspect(execution)
+    if state.get("Running") or state.get("ExitCode") != 0:
+        raise ValueError("requested file could not be safely exported: " + relative)
+    return bytes(data)
+
+
 def _collect(
     container: Any, directory: Path, paths: list[str], profile: str, client: Any
 ) -> list[dict[str, Any]]:
     artifacts = []
     total = 0
     for index, relative in enumerate(paths):
-        remaining = MAX_ARTIFACT_BYTES - total
-        argv = (
-            ["node", "-e", NODE_READER, relative, str(remaining)]
-            if profile == "node"
-            else ["python", "-c", PYTHON_READER, relative, str(remaining)]
-        )
-        execution = client.api.exec_create(container.id, argv, stdout=True, stderr=False)["Id"]
-        stream = client.api.exec_start(execution, stream=True)
-        data = bytearray()
-        try:
-            for chunk in stream:
-                data.extend(chunk)
-                if len(data) > remaining:
-                    raise ValueError("artifacts exceed byte budget")
-        finally:
-            with suppress(OSError):
-                stream.close()
-        state = client.api.exec_inspect(execution)
-        if state.get("Running") or state.get("ExitCode") != 0:
-            raise ValueError("requested artifact could not be safely exported: " + relative)
+        data = _read_file(container, "/work", relative, profile, client, MAX_ARTIFACT_BYTES - total)
         total += len(data)
         name = f"artifact-{index}-0"
         (directory / name).write_bytes(data)
@@ -206,12 +257,27 @@ def _collect(
     return artifacts
 
 
+def _execute(container: Any, client: Any, argv: list[str], deadline: float, cancelled: Any) -> int:
+    execution = client.api.exec_create(container.id, argv)["Id"]
+    client.api.exec_start(execution, detach=True)
+    while True:
+        if cancelled():
+            raise SnapshotCancelledError("job cancelled")
+        if time.monotonic() >= deadline:
+            raise TimeoutError("job deadline exceeded")
+        state = client.api.exec_inspect(execution)
+        if not state["Running"]:
+            return int(state["ExitCode"])
+        time.sleep(0.05)
+
+
 def run(
     request: ValidationRequest,
     store: Path,
     *,
     client: Any = None,
     cancel_event: threading.Event | None = None,
+    workspace_fd: int | None = None,
 ) -> dict[str, Any]:
     """Run a snapshot once, with explicit lifecycle ownership and durable evidence."""
     store = secure_path(store)
@@ -283,18 +349,20 @@ def run(
             snapshot.chmod(0o755)
             receipt["snapshot_path"] = str(snapshot.resolve())
             _write(directory, receipt)
-            receipt["snapshot"] = capture(Path(request.workspace), snapshot)
+            receipt["snapshot"] = capture_bounded(
+                Path(request.workspace),
+                snapshot,
+                deadline=deadline,
+                cancelled=lambda: (directory / "cancel-requested").exists()
+                or (cancel_event is not None and cancel_event.is_set()),
+                workspace_fd=workspace_fd,
+            )
             if not (snapshot / request.cwd).is_dir():
                 raise ValueError("cwd missing from snapshot")
             if abort:
                 raise TimeoutError("validation budget expired during preparation")
-            # argv remains positional; only this fixed bootstrap runs through sh.
-            bootstrap = (
-                "("
-                + probe_script(request)
-                + ") || { touch /tmp/profile-error; exit 127; }; "
-                + 'cp -R /input/. /work/ && cd "$1" && shift && exec "$@" > /tmp/validation-output 2>&1'
-            )
+            # Fixed bootstrap receives positional argv; user strings are never interpolated.
+            bootstrap = 'cp -R /input/. /work/ && cd "$1" && shift && exec "$@" > /tmp/validation-output 2>&1'
             container = client.containers.create(
                 image.id,
                 command=["sleep", str(request.timeout_seconds + 15)],
@@ -326,56 +394,75 @@ def run(
             receipt.update(status="running", container_id=container.id)
             _write(directory, receipt)
             container.start()
-            execution = client.api.exec_create(
-                container.id,
-                ["/bin/sh", "-c", bootstrap, "sandbox", "/work/" + request.cwd, *request.argv],
-            )["Id"]
-            client.api.exec_start(execution, detach=True)
-            while True:
-                state = client.api.exec_inspect(execution)
-                if not state["Running"]:
-                    break
-                if (directory / "cancel-requested").exists() or (
+
+            def cancelled() -> bool:
+                return (directory / "cancel-requested").exists() or (
                     cancel_event is not None and cancel_event.is_set()
-                ):
-                    receipt["status"] = "cancelled"
-                    container.kill()
-                    break
-                if time.monotonic() >= deadline:
-                    receipt["status"] = "timeout"
-                    container.kill()
-                    break
-                time.sleep(0.1)
-            receipt["exit_code"] = client.api.exec_inspect(execution).get("ExitCode")
-            if receipt["status"] == "running":
-                receipt["status"] = (
-                    "cancelled"
-                    if (directory / "cancel-requested").exists()
-                    else ("passed" if receipt["exit_code"] == 0 else "failed")
                 )
-            output = b""
-            if receipt["status"] not in {"timeout", "cancelled"}:
-                receipt["runtime_versions"] = container.exec_run(
-                    ["/bin/sh", "-c", "head -c 4096 /tmp/runtime-versions"]
-                ).output.decode("utf-8", errors="replace")
-                if container.exec_run(["test", "-f", "/tmp/profile-error"]).exit_code == 0:
-                    receipt["status"] = "environment_incompatible"
-                output = container.exec_run(
-                    ["/bin/sh", "-c", f"head -c {MAX_LOG + 1} /tmp/validation-output"]
-                ).output
-            receipt["logs_truncated"] = len(output) > MAX_LOG
-            log = redact(output[:MAX_LOG].decode("utf-8", errors="replace"))
-            (directory / "output.log").write_text(log)
-            receipt["log_sha256"] = hashlib.sha256(log.encode()).hexdigest()
-            if request.artifacts and receipt["status"] in {"passed", "failed"}:
+
+            probe_code = _execute(
+                container,
+                client,
+                ["/bin/sh", "-c", "(" + probe_script(request) + ") > /tmp/runtime-versions 2>&1"],
+                deadline,
+                cancelled,
+            )
+            receipt["probe_exit_code"] = probe_code
+            if probe_code != 0:
+                receipt["status"] = "environment_incompatible"
+            else:
+                versions = _read_file(
+                    container,
+                    "/tmp",
+                    "runtime-versions",
+                    request.profile,
+                    client,
+                    4096,
+                    truncate=True,
+                )
+                receipt["runtime_versions"] = versions[:4096].decode("utf-8", errors="replace")
+                code = _execute(
+                    container,
+                    client,
+                    ["/bin/sh", "-c", bootstrap, "sandbox", "/work/" + request.cwd, *request.argv],
+                    deadline,
+                    cancelled,
+                )
+                receipt["exit_code"] = code
+                receipt["status"] = "passed" if code == 0 else "failed"
                 try:
-                    receipt["artifacts"] = _collect(
-                        container, directory, request.artifacts, request.profile, client
+                    output = _read_file(
+                        container,
+                        "/tmp",
+                        "validation-output",
+                        request.profile,
+                        client,
+                        MAX_LOG,
+                        truncate=True,
                     )
+                    receipt["logs_truncated"] = len(output) > MAX_LOG
+                    log = redact(output[:MAX_LOG].decode("utf-8", errors="replace"))
+                    (directory / "output.log").write_text(log)
+                    receipt["log_sha256"] = hashlib.sha256(log.encode()).hexdigest()
                 except Exception as error:
-                    receipt["artifact_error"] = redact(str(error))[:2000]
+                    receipt["log_error"] = redact(str(error))[:2000]
                     if receipt["status"] == "passed":
-                        receipt["status"] = "artifact_error"
+                        receipt["status"] = "collection_error"
+                if request.artifacts and receipt["status"] in {"passed", "failed"}:
+                    try:
+                        receipt["artifacts"] = _collect(
+                            container, directory, request.artifacts, request.profile, client
+                        )
+                    except Exception as error:
+                        receipt["artifact_error"] = redact(str(error))[:2000]
+                        if receipt["status"] == "passed":
+                            receipt["status"] = "artifact_error"
+
+    except (TimeoutError, SnapshotCancelledError) as error:
+        receipt.update(
+            status="cancelled" if isinstance(error, SnapshotCancelledError) else "timeout",
+            error=str(error),
+        )
     except Exception as error:
         receipt.update(
             status=abort.get("reason")
@@ -408,14 +495,28 @@ def run(
 
 
 def verify(
-    request: ValidationRequest, store: Path, run_id: str, *, client: Any = None
+    request: ValidationRequest,
+    store: Path,
+    run_id: str,
+    *,
+    client: Any = None,
+    workspace_fd: int | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     """Revalidate historical proof, never imply a live process was restored."""
     receipt = read_run(store, run_id)
     reasons = []
     if receipt["request_sha256"] != request_hash(request):
         reasons.append("request_changed")
-    if receipt.get("snapshot", {}).get("sha256") != capture(Path(request.workspace))["sha256"]:
+    if (
+        receipt.get("snapshot", {}).get("sha256")
+        != capture_bounded(
+            Path(request.workspace),
+            deadline=time.monotonic() + request.timeout_seconds,
+            workspace_fd=workspace_fd,
+            cancelled=lambda: cancel_event is not None and cancel_event.is_set(),
+        )["sha256"]
+    ):
         reasons.append("snapshot_changed")
     owned = client is None
     try:

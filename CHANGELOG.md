@@ -153,3 +153,12 @@ All notable changes to this project are documented in this file.
 
 - `--max-depth 1` is still a tight setting and may fail on prompts that need at least one extra recursive or tool step.
 - The repository's GitHub release workflow attempted trusted publishing, but PyPI rejected the repo as an invalid trusted publisher. The `2.1.2` package was published successfully with the existing local PyPI token fallback.
+
+## 2.3.0 (candidate)
+
+- Add standalone deterministic repository validation CLI/MCP, independent of accounts and inference.
+- Isolate exact filtered source snapshots in non-root, network-off, resource-bounded Docker jobs.
+- Qualify Python, Node and mixed profiles; capture runtime versions and immutable image IDs.
+- Export bounded evidence and artifacts; detect stale historical proof; cancel owned jobs.
+- Require explicit scoped user choices when the requested environment is unavailable; never fall back silently.
+- See docs/repository-validation.md for qualification limits, including legacy REPL and crash recovery boundaries.

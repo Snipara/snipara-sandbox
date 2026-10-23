@@ -68,3 +68,36 @@ def cancel_command(
     run_id: str = typer.Option(...), store: Path = typer.Option(Path(".snipara/validation"))
 ) -> None:
     output(cancel(store, run_id))
+
+
+@app.command("gate")
+def gate_command(
+    request: Path = typer.Option(..., exists=True, dir_okay=False), scope: str = typer.Option(...)
+) -> None:
+    from rlm.validation.environment import gate
+
+    result = gate(load_request(request), scope)
+    output(result)
+    if result["status"] == "needs_user_choice":
+        raise typer.Exit(2)
+
+
+@app.command("choose")
+def choose_command(
+    request: Path = typer.Option(..., exists=True, dir_okay=False),
+    scope: str = typer.Option(...),
+    choice: str = typer.Option(...),
+    environment: str = typer.Option(""),
+    acknowledge_user_choice: bool = typer.Option(False),
+) -> None:
+    from rlm.validation.environment import record_choice
+
+    output(
+        record_choice(
+            load_request(request),
+            scope,
+            choice,
+            acknowledged=acknowledge_user_choice,
+            environment=environment,
+        )
+    )

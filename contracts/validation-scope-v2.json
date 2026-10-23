@@ -1,0 +1,50 @@
+{
+  "contract": "snipara.validation.scope.v2",
+  "cases": [
+    {
+      "request": {
+        "workspace": "/",
+        "argv": [
+          "python",
+          "test.py"
+        ],
+        "image": "prepared:local",
+        "cpus": 2.0,
+        "cwd": "."
+      },
+      "scope": "lot",
+      "preimage": "[\"snipara.validation.scope.v2\",\"lot\",\"snipara.sandbox.validation.v1\",\"/\",\"python\",\"prepared:local\",\".\",\"120\",\"2000000000\",\"2048\",\"128\",\"2048\"]",
+      "sha256": "127eb5f863193f09587af55c1d3d766518c55cba27f11c7db263dcfec91a1907"
+    },
+    {
+      "request": {
+        "workspace": "/",
+        "argv": [
+          "python",
+          "test.py"
+        ],
+        "image": "prepared:local",
+        "cpus": 0.125,
+        "cwd": "src/tests"
+      },
+      "scope": "phase-café-雪-😀",
+      "preimage": "[\"snipara.validation.scope.v2\",\"phase-café-雪-😀\",\"snipara.sandbox.validation.v1\",\"/\",\"python\",\"prepared:local\",\"src/tests\",\"120\",\"125000000\",\"2048\",\"128\",\"2048\"]",
+      "sha256": "a4ff280aa8e1899436ab60fd7395c436036322794ebb7f535f3f12d76a66fcad"
+    },
+    {
+      "request": {
+        "workspace": "/",
+        "argv": [
+          "python",
+          "test.py"
+        ],
+        "image": "prepared:local",
+        "cpus": 0.010000001,
+        "cwd": "."
+      },
+      "scope": "fractional",
+      "preimage": "[\"snipara.validation.scope.v2\",\"fractional\",\"snipara.sandbox.validation.v1\",\"/\",\"python\",\"prepared:local\",\".\",\"120\",\"10000001\",\"2048\",\"128\",\"2048\"]",
+      "sha256": "46d602a02b14de0d97ee987e7a2f2196f43babbf9be7cfdb8e80daffb5ac5e61"
+    }
+  ]
+}

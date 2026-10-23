@@ -117,3 +117,13 @@ policy migration if adding this requirement.
 Qualification targets macOS/Linux Docker. Windows and remote/multi-tenant engines
 are not qualified by this release. No package is considered published merely
 because the candidate sources or local wheels exist.
+
+Scope binding uses `snipara.validation.scope.v2`: SHA256 of a compact UTF-8 JSON
+array of strings: contract version, workflow scope, request schema, normalized absolute workspace (only root-owned OS aliases resolve),
+profile, image, normalized cwd, timeout seconds, enforced integer nano-CPU budget,
+memory MiB, PID budget and aggregate disk MiB. Command argv and requested artifacts
+are deliberately excluded so a choice remains usable within the same environment
+and lot; execution receipts still bind the exact command and artifacts.
+Consumers independently compute the expected scope from the supplied request;
+returned hashes are never their own authority. Cross-language vectors are in
+`contracts/validation-scope-v2.json`. Older candidate scope hashes are invalidated.

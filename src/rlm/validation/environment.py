@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 from pathlib import Path
 from typing import Any
 
+from rlm.validation.identity import scope_identity
 from rlm.validation.models import ValidationRequest
 from rlm.validation.paths import secure_path
 from rlm.validation.runner import canonical, diagnose
@@ -15,14 +15,6 @@ from rlm.validation.state import StateDirectory
 
 PROMPT = "Snipara Sandbox n'est pas disponible pour ces tests. Souhaitez-vous utiliser un autre environnement, installer/configurer Sandbox, ou continuer sans Sandbox ?"
 CHOICES = ["alternative", "install", "local", "skip"]
-
-
-def scope_identity(request: ValidationRequest, scope: str) -> str:
-    if not scope or len(scope) > 256:
-        raise ValueError("explicit bounded workflow scope required")
-    context = request.model_dump(exclude={"argv", "artifacts"})
-    context["workspace"] = str(Path(request.workspace).resolve(strict=True))
-    return hashlib.sha256(canonical({"scope": scope, "context": context})).hexdigest()
 
 
 def choice_path(request: ValidationRequest, scope: str) -> Path:

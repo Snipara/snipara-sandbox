@@ -56,3 +56,20 @@ def test_expired_choice_and_other_project_do_not_inherit(tmp_path):
         ]
         == "needs_user_choice"
     )
+
+
+def test_portable_scope_matches_published_cross_language_vectors():
+    import json
+    from pathlib import Path
+
+    from rlm.validation.identity import scope_identity
+    from rlm.validation.models import ValidationRequest
+
+    fixture = json.loads(
+        (Path(__file__).resolve().parents[2] / "contracts/validation-scope-v2.json").read_text()
+    )
+    for case in fixture["cases"]:
+        assert (
+            scope_identity(ValidationRequest.model_validate(case["request"]), case["scope"])
+            == case["sha256"]
+        )

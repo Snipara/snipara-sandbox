@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -18,7 +19,7 @@ from typing import Any
 from rlm.validation.artifact_readers import NODE_READER, PYTHON_READER
 from rlm.validation.limits import disk_allocation, require_capabilities
 from rlm.validation.models import SCHEMA, ValidationRequest
-from rlm.validation.paths import secure_path
+from rlm.validation.paths import canonical_system_path, secure_path
 from rlm.validation.profiles import probe_script
 from rlm.validation.snapshot import (
     SnapshotCancelledError,
@@ -221,7 +222,7 @@ def cancel(store: Path, run_id: str, *, client: Any = None) -> dict[str, Any]:
                 client.close()
 
 
-def _read_file(
+def _read_file_direct(
     container: Any,
     root: str,
     relative: str,
@@ -267,13 +268,96 @@ def _read_file(
     return bytes(data)
 
 
+def _read_file(
+    container: Any,
+    root: str,
+    relative: str,
+    profile: str,
+    client: Any,
+    limit: int,
+    *,
+    truncate: bool = False,
+    deadline: float,
+    cancelled: Any,
+) -> bytes:
+    """Keep daemon stream stalls in a killable helper, independent of container kill."""
+    script = "import sys,json; sys.path.insert(0,sys.argv[1]); from rlm.validation.runner import docker_client,_read_file_direct; from rlm.validation.snapshot import _watch_owner; _watch_owner(int(sys.argv[8]),float(sys.argv[9])); c=docker_client(); v=_read_file_direct(c.containers.get(sys.argv[2]),sys.argv[3],sys.argv[4],sys.argv[5],c,int(sys.argv[6]),truncate=sys.argv[7]=='1'); sys.stdout.buffer.write(v); c.close()"
+    read_fd, write_fd = os.pipe()
+    process = None
+    try:
+        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    script,
+                    str(Path(__file__).resolve().parents[2]),
+                    container.id,
+                    root,
+                    relative,
+                    profile,
+                    str(limit),
+                    "1" if truncate else "0",
+                    str(read_fd),
+                    str(deadline),
+                ],
+                env=CONTROL_ENV,
+                pass_fds=(read_fd,),
+                stdout=output,
+                stderr=errors,
+            )
+            while process.poll() is None:
+                if cancelled():
+                    raise SnapshotCancelledError("collection cancelled")
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("collection deadline exceeded")
+                if output.tell() > limit + int(truncate):
+                    raise ValueError("file export exceeds byte budget")
+                time.sleep(0.02)
+            if process.returncode:
+                errors.seek(0)
+                raise ValueError(
+                    "collection helper refused export: "
+                    + errors.read(2048).decode("utf-8", errors="replace")
+                )
+            output.seek(0)
+            data = output.read(limit + 2)
+            if len(data) > limit + int(truncate):
+                raise ValueError("file export exceeds byte budget")
+            return data
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+        os.close(read_fd)
+        os.close(write_fd)
+
+
 def _collect(
-    container: Any, directory: StateDirectory, paths: list[str], profile: str, client: Any
+    container: Any,
+    directory: StateDirectory,
+    paths: list[str],
+    profile: str,
+    client: Any,
+    *,
+    deadline: float,
+    cancelled: Any,
 ) -> list[dict[str, Any]]:
     artifacts = []
     total = 0
     for index, relative in enumerate(paths):
-        data = _read_file(container, "/work", relative, profile, client, MAX_ARTIFACT_BYTES - total)
+        data = _read_file(
+            container,
+            "/work",
+            relative,
+            profile,
+            client,
+            MAX_ARTIFACT_BYTES - total,
+            deadline=deadline,
+            cancelled=cancelled,
+        )
         total += len(data)
         name = f"artifact-{index}-0"
         directory.write(name, data)
@@ -316,7 +400,7 @@ def run(
 ) -> dict[str, Any]:
     """Run a snapshot once, with explicit lifecycle ownership and durable evidence."""
     store = secure_path(store)
-    project = Path(request.workspace).resolve()
+    project = canonical_system_path(Path(request.workspace))
     resolved_store = store.resolve()
     if resolved_store == project or (
         resolved_store.is_relative_to(project)
@@ -329,6 +413,7 @@ def run(
         directory = state_root.child(run_id, create=True)
     finally:
         state_root.close()
+    owner_lock = directory.acquire_owner()
     receipt: dict[str, Any] = {
         "schema_version": SCHEMA,
         "run_id": run_id,
@@ -347,6 +432,7 @@ def run(
     try:
         _write(directory, receipt)
     except BaseException:
+        os.close(owner_lock)
         directory.close()
         raise
     container = None
@@ -382,6 +468,7 @@ def run(
     try:
         watcher.start()
     except BaseException:
+        os.close(owner_lock)
         directory.close()
         raise
     try:
@@ -482,6 +569,8 @@ def run(
                     client,
                     4096,
                     truncate=True,
+                    deadline=deadline,
+                    cancelled=cancelled,
                 )
                 receipt["runtime_versions"] = versions[:4096].decode("utf-8", errors="replace")
                 code = _execute(
@@ -502,6 +591,8 @@ def run(
                         client,
                         MAX_LOG,
                         truncate=True,
+                        deadline=deadline,
+                        cancelled=cancelled,
                     )
                     receipt["logs_truncated"] = len(output) > MAX_LOG
                     encoded = redact(output[:MAX_LOG].decode("utf-8", errors="replace")).encode(
@@ -518,7 +609,13 @@ def run(
                 if request.artifacts and receipt["status"] in {"passed", "failed"}:
                     try:
                         receipt["artifacts"] = _collect(
-                            container, directory, request.artifacts, request.profile, client
+                            container,
+                            directory,
+                            request.artifacts,
+                            request.profile,
+                            client,
+                            deadline=deadline,
+                            cancelled=cancelled,
                         )
                     except Exception as error:
                         receipt["artifact_error"] = redact(str(error))[:2000]
@@ -574,6 +671,7 @@ def run(
         try:
             _write(directory, receipt)
         finally:
+            os.close(owner_lock)
             directory.close()
             if owned and client is not None:
                 client.close()
@@ -707,4 +805,8 @@ def recover(store: Path, run_id: str, *, client: Any = None) -> dict[str, Any]:
     if not RUN_ID.fullmatch(run_id):
         raise ValueError("invalid run id")
     with open_run(store, run_id) as directory:
-        return _recover(directory, run_id, client=client)
+        owner_lock = directory.acquire_owner()
+        try:
+            return _recover(directory, run_id, client=client)
+        finally:
+            os.close(owner_lock)

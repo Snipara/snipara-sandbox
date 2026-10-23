@@ -226,3 +226,57 @@ def test_ambiguous_docker_create_reconciles_owned_name(tmp_path):
     assert receipt["cleanup_complete"] is True
     client.containers.get.assert_called_with("snipara-validation-" + receipt["run_id"])
     client.containers.get.return_value.remove.assert_called_once_with(force=True, v=True)
+
+
+def test_recovery_refuses_active_owner_without_overwriting_receipt(tmp_path):
+    from rlm.validation.runner import recover
+    from rlm.validation.state import StateDirectory
+
+    run_id = "e" * 32
+    folder = tmp_path / run_id
+    folder.mkdir()
+    receipt = {
+        "schema_version": "snipara.sandbox.validation.v1",
+        "run_id": run_id,
+        "status": "preparing",
+    }
+    (folder / "receipt.json").write_bytes(canonical(receipt))
+    with StateDirectory.open(folder) as directory:
+        lock = directory.acquire_owner()
+        try:
+            with pytest.raises(ValueError, match="still active"):
+                recover(tmp_path, run_id, client=Mock())
+            assert json.loads((folder / "receipt.json").read_text()) == receipt
+        finally:
+            import os
+
+            os.close(lock)
+
+
+def test_collection_deadline_survives_stalled_daemon_and_failed_container_kill(
+    tmp_path, monkeypatch
+):
+    import subprocess
+    import time
+
+    import rlm.validation.runner as runner
+
+    popen = subprocess.Popen
+
+    def stalled(argv, **kwargs):
+        return popen([argv[0], "-I", "-c", "import time; time.sleep(30)"], **kwargs)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", stalled)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="collection deadline"):
+        runner._read_file(
+            Mock(id="owned"),
+            "/work",
+            "artifact",
+            "python",
+            Mock(),
+            1024,
+            deadline=started + 0.2,
+            cancelled=lambda: False,
+        )
+    assert time.monotonic() - started < 3

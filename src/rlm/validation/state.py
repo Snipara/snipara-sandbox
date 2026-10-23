@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
 import stat
 import uuid
@@ -86,6 +87,23 @@ class StateDirectory:
                 os.unlink(temporary, dir_fd=self.fd)
             except FileNotFoundError:
                 pass
+
+    def acquire_owner(self) -> int:
+        fd = os.open(
+            "owner.lock",
+            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+            0o600,
+            dir_fd=self.fd,
+        )
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError("invalid owner lock")
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise ValueError("validation owner is still active; recovery refused") from None
 
     def close(self) -> None:
         if self.fd >= 0:

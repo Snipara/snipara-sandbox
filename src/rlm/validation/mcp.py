@@ -13,9 +13,9 @@ from typing import Any
 from mcp.types import CallToolResult, TextContent, Tool
 
 from rlm.validation.models import ValidationRequest
-from rlm.validation.paths import secure_path
+from rlm.validation.paths import canonical_system_path, secure_path
 from rlm.validation.runner import cancel, diagnose, read_run, recover, run, verify
-from rlm.validation.snapshot import excluded, pin_directory
+from rlm.validation.snapshot import excluded, pin_directory_bounded
 
 NAMES = {
     "validation_diagnose",
@@ -69,12 +69,12 @@ async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolRe
         request = None
         if "request" in arguments:
             request = ValidationRequest.model_validate(arguments["request"])
-            workspace = Path(request.workspace).resolve(strict=True)
+            workspace = canonical_system_path(Path(request.workspace))
             if not workspace.is_relative_to(root):
                 raise ValueError("workspace is outside operator-configured MCP root")
             if any(excluded(part) for part in workspace.relative_to(root).parts):
                 raise ValueError("workspace traverses an excluded source directory")
-            workspace_fd = pin_directory(workspace, root=root)
+            workspace_fd = await asyncio.to_thread(pin_directory_bounded, workspace, root=root)
             request = request.model_copy(update={"workspace": str(workspace)})
 
         async def with_workspace(function: Any, *args: Any) -> Any:

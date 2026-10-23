@@ -116,11 +116,7 @@ def capture(
     """Stream entries, preserve empty directories, and never follow source links."""
     if workspace_fd is None and workspace.is_symlink():
         raise ValueError("workspace must not be a symlink")
-    source_fd = (
-        os.dup(workspace_fd)
-        if workspace_fd is not None
-        else pin_directory(workspace.resolve(strict=True))
-    )
+    source_fd = os.dup(workspace_fd) if workspace_fd is not None else pin_directory(workspace)
     files: list[dict[str, Any]] = []
     directories: list[dict[str, Any]] = []
     omissions = []
@@ -211,12 +207,8 @@ def capture_bounded(
     workspace_fd: int | None = None,
 ) -> dict[str, Any]:
     """A disposable helper makes blocked source I/O cancellable by its parent."""
-    fd = (
-        os.dup(workspace_fd)
-        if workspace_fd is not None
-        else pin_directory(workspace.resolve(strict=True))
-    )
-    script = "import runpy,json,sys; from pathlib import Path; m=runpy.run_path(sys.argv[1]); m['_watch_owner'](int(sys.argv[5]),float(sys.argv[6])); value=m['capture'](Path(sys.argv[2]),Path(sys.argv[4]) if sys.argv[4] else None,workspace_fd=int(sys.argv[3])); json.dump(value,sys.stdout,sort_keys=True)"
+    fd = os.dup(workspace_fd) if workspace_fd is not None else -1
+    script = "import runpy,json,sys; from pathlib import Path; m=runpy.run_path(sys.argv[1]); m['_watch_owner'](int(sys.argv[5]),float(sys.argv[6])); value=m['capture'](Path(sys.argv[2]),Path(sys.argv[4]) if sys.argv[4] else None,workspace_fd=int(sys.argv[3]) if int(sys.argv[3]) >= 0 else None); json.dump(value,sys.stdout,sort_keys=True)"
     env = {
         name: value
         for name, value in os.environ.items()
@@ -242,7 +234,11 @@ def capture_bounded(
                     str(lifeline_read),
                     str(deadline),
                 ],
-                pass_fds=(fd, lifeline_read, *((lock_fd,) if lock_fd is not None else ())),
+                pass_fds=(
+                    *((fd,) if fd >= 0 else ()),
+                    lifeline_read,
+                    *((lock_fd,) if lock_fd is not None else ()),
+                ),
                 stdout=output,
                 stderr=errors,
                 env=env,
@@ -266,7 +262,8 @@ def capture_bounded(
                     process.kill()
                 process.wait(timeout=5)
     finally:
-        os.close(fd)
+        if fd >= 0:
+            os.close(fd)
         os.close(lifeline_read)
         os.close(lifeline_write)
         if lock_fd is not None:
@@ -308,3 +305,49 @@ def remove_recovered_snapshot(path: Path) -> None:
         shutil.rmtree(path)
     finally:
         os.close(fd)
+
+
+def pin_directory_bounded(path: Path, *, root: Path, timeout: float = 10) -> int:
+    """Transfer an opened directory from a killable helper, never block MCP on source I/O."""
+    import array
+    import socket
+
+    parent, child = socket.socketpair()
+    script = "import runpy,sys,socket,array; from pathlib import Path; m=runpy.run_path(sys.argv[1]); m['_watch_owner'](int(sys.argv[4]),float(sys.argv[5])); fd=m['pin_directory'](Path(sys.argv[2]),root=Path(sys.argv[3])); s=socket.socket(fileno=int(sys.argv[4])); s.sendmsg([b'fd'],[(socket.SOL_SOCKET,socket.SCM_RIGHTS,array.array('i',[fd]))])"
+    process = None
+    try:
+        parent.settimeout(timeout)
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                script,
+                str(Path(__file__).resolve()),
+                str(path),
+                str(root),
+                str(child.fileno()),
+                str(time.monotonic() + timeout),
+            ],
+            pass_fds=(child.fileno(),),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        child.close()
+        _, ancillary, _, _ = parent.recvmsg(2, socket.CMSG_SPACE(array.array("i").itemsize))
+        descriptors = array.array("i")
+        for level, kind, data in ancillary:
+            if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                descriptors.frombytes(data[: len(data) - len(data) % descriptors.itemsize])
+        if len(descriptors) != 1:
+            for fd in descriptors:
+                os.close(fd)
+            raise ValueError("source directory could not be safely acquired")
+        return descriptors[0]
+    finally:
+        parent.close()
+        child.close()
+        if process is not None:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)

@@ -196,3 +196,42 @@ def test_recovery_refuses_live_snapshot_writer(tmp_path):
         assert tmp_path.exists()
     finally:
         os.close(fd)
+
+
+def test_source_directory_acquisition_is_bounded_and_transfers_exact_fd(tmp_path, monkeypatch):
+    import os
+    import time
+
+    import rlm.validation.snapshot as snapshots
+
+    root = tmp_path / "root"
+    root.mkdir()
+    fd = snapshots.pin_directory_bounded(root, root=tmp_path)
+    try:
+        assert os.fstat(fd).st_ino == root.stat().st_ino
+    finally:
+        os.close(fd)
+    helper = tmp_path / "slow-directory.py"
+    helper.write_text(
+        "import time\ndef _watch_owner(*a): pass\ndef pin_directory(*a,**k): time.sleep(30)\n"
+    )
+    monkeypatch.setattr(snapshots, "__file__", str(helper))
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        snapshots.pin_directory_bounded(root, root=tmp_path, timeout=0.2)
+    assert time.monotonic() - started < 3
+
+
+def test_source_ancestor_symlink_is_never_resolved_into_authority(tmp_path):
+    import time
+
+    from rlm.validation.snapshot import capture_bounded
+
+    outside = tmp_path / "outside"
+    child = outside / "child"
+    child.mkdir(parents=True)
+    (child / "private").write_text("synthetic")
+    alias = tmp_path / "alias"
+    alias.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError):
+        capture_bounded(alias / "child", deadline=time.monotonic() + 2)

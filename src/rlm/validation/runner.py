@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -21,7 +20,11 @@ from rlm.validation.limits import disk_allocation, require_capabilities
 from rlm.validation.models import SCHEMA, ValidationRequest
 from rlm.validation.paths import secure_path
 from rlm.validation.profiles import probe_script
-from rlm.validation.snapshot import SnapshotCancelledError, capture_bounded
+from rlm.validation.snapshot import (
+    SnapshotCancelledError,
+    capture_bounded,
+    remove_recovered_snapshot,
+)
 from rlm.validation.state import StateDirectory, open_run
 
 # Capture operator transport settings before any legacy project dotenv loading.
@@ -406,8 +409,10 @@ def run(
                 Path(request.workspace),
                 snapshot,
                 deadline=deadline,
-                cancelled=lambda: directory.exists("cancel-requested")
-                or (cancel_event is not None and cancel_event.is_set()),
+                cancelled=lambda: (
+                    directory.exists("cancel-requested")
+                    or (cancel_event is not None and cancel_event.is_set())
+                ),
                 workspace_fd=workspace_fd,
             )
             if not (snapshot / request.cwd).is_dir():
@@ -543,7 +548,23 @@ def run(
                 if receipt["status"] == "passed":
                     receipt["status"] = "cleanup_failed"
         else:
-            receipt["cleanup_complete"] = True
+            # A failed create/inspect response may still have created the named job.
+            try:
+                from docker.errors import NotFound
+
+                if client is not None:
+                    try:
+                        pending = client.containers.get("snipara-validation-" + run_id)
+                    except NotFound:
+                        pass
+                    else:
+                        if pending.labels.get(LABEL) != run_id:
+                            raise ValueError("ambiguous creation ownership mismatch")
+                        pending.remove(force=True, v=True)
+                receipt["cleanup_complete"] = True
+            except Exception as error:
+                receipt["cleanup_complete"] = False
+                receipt["cleanup_error"] = redact(str(error))[:2000]
         monitor_stop.set()
         watcher.join(timeout=12)
         if abort.get("reason"):
@@ -673,7 +694,7 @@ def _recover(store: StateDirectory, run_id: str, *, client: Any = None) -> dict[
             ):
                 raise ValueError("snapshot recovery ownership mismatch")
             if snapshot.exists():
-                shutil.rmtree(snapshot)
+                remove_recovered_snapshot(snapshot)
         receipt.update(status="interrupted", cleanup_complete=True, recovered_at=time.time())
         _write(store, receipt)
         return receipt

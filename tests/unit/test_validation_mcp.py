@@ -68,3 +68,24 @@ async def test_mcp_worker_receives_pinned_source_identity(tmp_path):
             root,
         )
     assert result.structuredContent["files"] == ["allowed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("subtree", [".aws/sso/cache", "source/.docker/config", "node_modules/pkg"])
+async def test_mcp_cannot_re_root_excluded_subtrees(tmp_path, subtree):
+    source = tmp_path / subtree
+    source.mkdir(parents=True)
+    with patch("rlm.validation.mcp.run") as execute:
+        result = await handle(
+            "validation_run",
+            {
+                "request": {
+                    "workspace": str(source),
+                    "argv": ["python", "test.py"],
+                    "image": "python:local",
+                }
+            },
+            tmp_path,
+        )
+    assert result.isError
+    execute.assert_not_called()

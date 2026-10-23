@@ -196,3 +196,33 @@ def test_public_cancel_preparing_persists_before_docker_exists(tmp_path):
     assert cancel(tmp_path, run_id, client=client)["cancel_requested"] is True
     assert (directory / "cancel-requested").exists()
     client.containers.get.assert_not_called()
+
+
+def test_ambiguous_docker_create_reconciles_owned_name(tmp_path):
+    from unittest.mock import patch
+
+    from rlm.validation.runner import run
+
+    project = tmp_path / "project"
+    project.mkdir()
+    request = ValidationRequest(
+        workspace=str(project), argv=["python", "test.py"], image="python:local"
+    )
+    client = Mock()
+    client.images.get.return_value.attrs = {"Config": {}}
+    client.images.get.return_value.id = "sha256:one"
+
+    def lost_response(*args, **kwargs):
+        client.containers.get.return_value.labels = kwargs["labels"]
+        raise OSError("synthetic lost Docker create response")
+
+    client.containers.create.side_effect = lost_response
+    with (
+        patch("rlm.validation.runner.require_capabilities", return_value={}),
+        patch("rlm.validation.runner.capture_bounded", return_value={}),
+    ):
+        receipt = run(request, tmp_path / "runs", client=client)
+    assert receipt["status"] == "error"
+    assert receipt["cleanup_complete"] is True
+    client.containers.get.assert_called_with("snipara-validation-" + receipt["run_id"])
+    client.containers.get.return_value.remove.assert_called_once_with(force=True, v=True)

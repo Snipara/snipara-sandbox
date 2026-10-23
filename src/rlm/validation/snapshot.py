@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -9,6 +10,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -214,12 +216,17 @@ def capture_bounded(
         if workspace_fd is not None
         else pin_directory(workspace.resolve(strict=True))
     )
-    script = "import runpy,json,sys; from pathlib import Path; m=runpy.run_path(sys.argv[1]); value=m['capture'](Path(sys.argv[2]),Path(sys.argv[4]) if sys.argv[4] else None,workspace_fd=int(sys.argv[3])); json.dump(value,sys.stdout,sort_keys=True)"
+    script = "import runpy,json,sys; from pathlib import Path; m=runpy.run_path(sys.argv[1]); m['_watch_owner'](int(sys.argv[5]),float(sys.argv[6])); value=m['capture'](Path(sys.argv[2]),Path(sys.argv[4]) if sys.argv[4] else None,workspace_fd=int(sys.argv[3])); json.dump(value,sys.stdout,sort_keys=True)"
     env = {
         name: value
         for name, value in os.environ.items()
         if name in {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"}
     }
+    lifeline_read, lifeline_write = os.pipe()
+    lock_fd = None
+    if destination is not None:
+        lock_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     try:
         with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
             process = subprocess.Popen(
@@ -232,8 +239,10 @@ def capture_bounded(
                     str(workspace),
                     str(fd),
                     str(destination) if destination is not None else "",
+                    str(lifeline_read),
+                    str(deadline),
                 ],
-                pass_fds=(fd,),
+                pass_fds=(fd, lifeline_read, *((lock_fd,) if lock_fd is not None else ())),
                 stdout=output,
                 stderr=errors,
                 env=env,
@@ -256,5 +265,46 @@ def capture_bounded(
                 if process.poll() is None:
                     process.kill()
                 process.wait(timeout=5)
+    finally:
+        os.close(fd)
+        os.close(lifeline_read)
+        os.close(lifeline_write)
+        if lock_fd is not None:
+            os.close(lock_fd)
+
+
+def _watch_owner(lifeline: int, deadline: float) -> None:
+    """Independent exit on owner pipe EOF or deadline, including blocked source I/O."""
+    import select
+
+    def watch() -> None:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                os._exit(124)
+            if select.select([lifeline], [], [], min(remaining, 0.05))[0] and not os.read(
+                lifeline, 1
+            ):
+                os._exit(125)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
+def remove_recovered_snapshot(path: Path) -> None:
+    """Never delete a snapshot still held by a capture helper."""
+    import shutil
+
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise ValueError("snapshot helper still active; recovery refused") from None
+                time.sleep(0.02)
+        shutil.rmtree(path)
     finally:
         os.close(fd)

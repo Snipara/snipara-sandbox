@@ -132,7 +132,9 @@ def test_slow_capture_helper_is_killed_at_deadline(tmp_path, monkeypatch):
     import rlm.validation.snapshot as snapshots
 
     helper = tmp_path / "owned-slow-helper.py"
-    helper.write_text("import time\ndef capture(*args,**kwargs):\n time.sleep(30)\n return {}\n")
+    helper.write_text(
+        "import time\ndef _watch_owner(*args): pass\ndef capture(*args,**kwargs):\n time.sleep(30)\n return {}\n"
+    )
     monkeypatch.setattr(snapshots, "__file__", str(helper))
     started = time.monotonic()
     with pytest.raises(TimeoutError):
@@ -156,3 +158,41 @@ def test_source_hardlinks_and_recognizable_credentials_are_refused(tmp_path):
         (project / folder / "config.json").write_text("private")
     (project / "secrets.yml").write_text("private")
     assert capture(project)["files"] == []
+
+
+def test_capture_helper_exits_when_owner_lifeline_closes(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    import rlm.validation.snapshot as snapshots
+
+    read_fd, write_fd = os.pipe()
+    script = "import runpy,sys,time; m=runpy.run_path(sys.argv[1]); m['_watch_owner'](int(sys.argv[2]),time.monotonic()+30); time.sleep(30)"
+    process = subprocess.Popen(
+        [sys.executable, "-I", "-c", script, snapshots.__file__, str(read_fd)], pass_fds=(read_fd,)
+    )
+    os.close(read_fd)
+    os.close(write_fd)
+    try:
+        assert process.wait(timeout=3) == 125
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def test_recovery_refuses_live_snapshot_writer(tmp_path):
+    import fcntl
+    import os
+
+    from rlm.validation.snapshot import remove_recovered_snapshot
+
+    fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        with pytest.raises(ValueError, match="still active"):
+            remove_recovered_snapshot(tmp_path)
+        assert tmp_path.exists()
+    finally:
+        os.close(fd)

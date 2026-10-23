@@ -93,12 +93,14 @@ def gate(
     if readiness.get("ready") is True:
         return {
             "status": "sandbox_ready",
+            "execution_authorized_by_gate": False,
             "scope_sha256": identity,
             "sandbox_used": False,
             "readiness": readiness,
         }
     return {
         "status": "needs_user_choice",
+        "sandbox_used": False,
         "scope_sha256": identity,
         "prompt": PROMPT,
         "choices": [

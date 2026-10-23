@@ -48,6 +48,8 @@ CONTROL_ENV = {
 LABEL = "com.snipara.sandbox.validation"
 MAX_LOG = 65536
 MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
+_ISOLATED_CONTROL = False
+_FORCED_RUN_ID: str | None = None
 RUN_ID = re.compile(r"^[a-f0-9]{32}$")
 
 
@@ -130,6 +132,10 @@ def diagnose(
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     """Check daemon, image and project, never install or run local commands."""
+    if client is None and not _ISOLATED_CONTROL:
+        return _control_call(
+            "diagnose", request=request, workspace_fd=workspace_fd, cancel_event=cancel_event
+        )
     report: dict[str, Any] = {
         "schema_version": SCHEMA,
         "status": "unavailable",
@@ -189,6 +195,8 @@ def _owned_container(client: Any, receipt: dict[str, Any]) -> Any:
 
 
 def cancel(store: Path, run_id: str, *, client: Any = None) -> dict[str, Any]:
+    if client is None and not _ISOLATED_CONTROL:
+        return _control_call("cancel", store=store, run_id=run_id)
     if not RUN_ID.fullmatch(run_id):
         raise ValueError("invalid run id")
     with open_run(store, run_id) as directory:
@@ -399,6 +407,14 @@ def run(
     workspace_fd: int | None = None,
 ) -> dict[str, Any]:
     """Run a snapshot once, with explicit lifecycle ownership and durable evidence."""
+    if client is None and not _ISOLATED_CONTROL:
+        return _control_call(
+            "run",
+            request=request,
+            store=store,
+            workspace_fd=workspace_fd,
+            cancel_event=cancel_event,
+        )
     store = secure_path(store)
     project = canonical_system_path(Path(request.workspace))
     resolved_store = store.resolve()
@@ -408,7 +424,7 @@ def run(
     ):
         raise ValueError("store inside workspace must be under excluded .snipara directory")
     state_root = StateDirectory.open(store, create=True)
-    run_id = uuid.uuid4().hex
+    run_id = _FORCED_RUN_ID or uuid.uuid4().hex
     try:
         directory = state_root.child(run_id, create=True)
     finally:
@@ -687,6 +703,15 @@ def verify(
     workspace_fd: int | None = None,
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
+    if client is None and not _ISOLATED_CONTROL:
+        return _control_call(
+            "verify",
+            request=request,
+            store=store,
+            run_id=run_id,
+            workspace_fd=workspace_fd,
+            cancel_event=cancel_event,
+        )
     if not RUN_ID.fullmatch(run_id):
         raise ValueError("invalid run id")
     with open_run(store, run_id) as directory:
@@ -802,6 +827,8 @@ def _recover(store: StateDirectory, run_id: str, *, client: Any = None) -> dict[
 
 
 def recover(store: Path, run_id: str, *, client: Any = None) -> dict[str, Any]:
+    if client is None and not _ISOLATED_CONTROL:
+        return _control_call("recover", store=store, run_id=run_id)
     if not RUN_ID.fullmatch(run_id):
         raise ValueError("invalid run id")
     with open_run(store, run_id) as directory:
@@ -810,3 +837,142 @@ def recover(store: Path, run_id: str, *, client: Any = None) -> dict[str, Any]:
             return _recover(directory, run_id, client=client)
         finally:
             os.close(owner_lock)
+
+
+def _process_entry(payload: dict[str, Any], workspace_fd: int) -> dict[str, Any]:
+    global _ISOLATED_CONTROL, _FORCED_RUN_ID
+    _ISOLATED_CONTROL = True
+    _FORCED_RUN_ID = payload.get("run_id") if payload["action"] == "run" else None
+    request = (
+        ValidationRequest.model_validate(payload["request"]) if payload.get("request") else None
+    )
+    action = payload["action"]
+    if action == "diagnose":
+        return diagnose(request, workspace_fd=workspace_fd if workspace_fd >= 0 else None)
+    store = Path(payload["store"])
+    if action == "run":
+        return run(request, store, workspace_fd=workspace_fd if workspace_fd >= 0 else None)
+    if action == "verify":
+        return verify(
+            request,
+            store,
+            payload["run_id"],
+            workspace_fd=workspace_fd if workspace_fd >= 0 else None,
+        )
+    if action == "cancel":
+        return cancel(store, payload["run_id"])
+    if action == "recover":
+        return recover(store, payload["run_id"])
+    raise ValueError("unsupported control action")
+
+
+def _control_call(
+    action: str,
+    *,
+    request: ValidationRequest | None = None,
+    store: Path | None = None,
+    run_id: str | None = None,
+    workspace_fd: int | None = None,
+    cancel_event: threading.Event | None = None,
+    timeout_override: float | None = None,
+) -> dict[str, Any]:
+    """Bound the entire daemon transaction, including control and cleanup calls."""
+    run_id = uuid.uuid4().hex if action == "run" else run_id
+    payload = {
+        "action": action,
+        "request": request.model_dump() if request else None,
+        "store": str(store) if store is not None else None,
+        "run_id": run_id,
+    }
+    # The command budget is enforced by the owner; this fixed grace also bounds cleanup.
+    timeout = (
+        timeout_override
+        if timeout_override is not None
+        else ((request.timeout_seconds + 20) if request is not None else 30)
+    )
+    deadline = time.monotonic() + timeout
+    read_fd, write_fd = os.pipe()
+    held_fd = os.dup(workspace_fd) if workspace_fd is not None else -1
+    process = None
+    script = "import sys,json; sys.path.insert(0,sys.argv[1]); from rlm.validation.runner import _process_entry; from rlm.validation.snapshot import _watch_owner; _watch_owner(int(sys.argv[3]),float(sys.argv[4])); v=_process_entry(json.loads(sys.argv[2]),int(sys.argv[5])); json.dump(v,sys.stdout)"
+    interrupted = ""
+    try:
+        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    script,
+                    str(Path(__file__).resolve().parents[2]),
+                    json.dumps(payload),
+                    str(read_fd),
+                    str(deadline),
+                    str(held_fd),
+                ],
+                env=CONTROL_ENV,
+                pass_fds=(read_fd, *((held_fd,) if held_fd >= 0 else ())),
+                stdout=output,
+                stderr=errors,
+            )
+            while process.poll() is None:
+                if cancel_event is not None and cancel_event.is_set():
+                    interrupted = "cancelled"
+                    break
+                if time.monotonic() >= deadline:
+                    interrupted = "timeout"
+                    break
+                if output.tell() > 8 * 1024 * 1024:
+                    interrupted = "error"
+                    break
+                time.sleep(0.02)
+            if interrupted:
+                process.kill()
+                process.wait(timeout=5)
+            elif process.returncode == 0:
+                output.seek(0)
+                return json.load(output)
+            elif process.returncode in {124, 125}:
+                interrupted = "timeout"
+            else:
+                errors.seek(0)
+                raise ValueError(
+                    "isolated control operation failed: "
+                    + redact(errors.read(2048).decode("utf-8", errors="replace"))
+                )
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+        os.close(read_fd)
+        os.close(write_fd)
+        if held_fd >= 0:
+            os.close(held_fd)
+    if action == "run" and store is not None and run_id is not None:
+        try:
+            receipt = read_run(store, run_id)
+        except FileNotFoundError:
+            receipt = {"schema_version": SCHEMA, "run_id": run_id, "backend": "docker"}
+        receipt["cleanup_complete"] = False
+        if receipt.get("status"):
+            try:
+                recovered = _control_call(
+                    "recover", store=store, run_id=run_id, timeout_override=min(10, timeout)
+                )
+                receipt.update(recovered)
+            except (ValueError, TimeoutError, OSError):
+                pass
+        receipt.update(
+            status=interrupted,
+            error="control owner interrupted; inspect cleanup_complete and recover explicitly if false",
+        )
+        with StateDirectory.open(store, create=True) as root:
+            try:
+                directory = root.child(run_id)
+            except FileNotFoundError:
+                directory = root.child(run_id, create=True)
+            with directory:
+                _write(directory, receipt)
+        return receipt
+    raise TimeoutError("control operation interrupted: " + interrupted)

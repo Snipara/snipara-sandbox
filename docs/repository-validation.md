@@ -81,7 +81,12 @@ and artifact/log bytes. Receipts are local runtime observations, not signed
 remote attestations. A historical receipt does not restore a running process.
 File artifacts must be regular files; links and oversized exports are refused.
 
-Timeout and explicit cancellation remove only containers owned by that run.
+Timeout and explicit cancellation target only containers owned by that run.
+The command timeout has a fixed control/cleanup grace of at most 30 seconds.
+Daemon transactions run in killable owner processes. If daemon control or cleanup
+cannot finish within that bound, the run fails with `cleanup_complete=false`;
+explicit recovery is required and verification refuses acceptance. Recovery
+refuses an active lifetime owner lock.
 Keep evidence before cleaning stores. If the host process is killed abruptly,
 run `validation recover --run-id <id> --store <store>` to remove only its
 label-checked container and record interrupted status. Recovery is explicit, not

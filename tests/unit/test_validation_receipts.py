@@ -280,3 +280,29 @@ def test_collection_deadline_survives_stalled_daemon_and_failed_container_kill(
             cancelled=lambda: False,
         )
     assert time.monotonic() - started < 3
+
+
+def test_entire_control_transaction_deadline_does_not_depend_on_daemon(tmp_path, monkeypatch):
+    import subprocess
+    import time
+
+    import rlm.validation.runner as runner
+
+    popen = subprocess.Popen
+
+    def stalled(argv, **kwargs):
+        return popen([argv[0], "-I", "-c", "import time; time.sleep(30)"], **kwargs)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", stalled)
+    project = tmp_path / "project"
+    project.mkdir()
+    request = ValidationRequest(
+        workspace=str(project), argv=["python", "check.py"], image="python:local"
+    )
+    started = time.monotonic()
+    receipt = runner._control_call(
+        "run", request=request, store=tmp_path / "runs", timeout_override=0.2
+    )
+    assert time.monotonic() - started < 3
+    assert receipt["status"] == "timeout" and receipt["cleanup_complete"] is False
+    assert read_run(tmp_path / "runs", receipt["run_id"])["cleanup_complete"] is False

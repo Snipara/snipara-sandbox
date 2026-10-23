@@ -89,3 +89,44 @@ async def test_mcp_cannot_re_root_excluded_subtrees(tmp_path, subtree):
         )
     assert result.isError
     execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_directory_acquisition_closes_late_descriptor(tmp_path):
+    import asyncio
+    import os
+    import threading
+    import time
+
+    acquired = []
+    started = threading.Event()
+
+    def slow_acquire(*args, **kwargs):
+        started.set()
+        time.sleep(0.15)
+        fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+        acquired.append(fd)
+        return fd
+
+    with patch("rlm.validation.mcp.pin_directory_bounded", side_effect=slow_acquire):
+        task = asyncio.create_task(
+            handle(
+                "validation_run",
+                {
+                    "request": {
+                        "workspace": str(tmp_path),
+                        "argv": ["python", "test.py"],
+                        "image": "python:local",
+                    }
+                },
+                tmp_path,
+            )
+        )
+        while not started.is_set():
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert len(acquired) == 1
+    with pytest.raises(OSError):
+        os.fstat(acquired[0])

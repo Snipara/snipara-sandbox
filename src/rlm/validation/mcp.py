@@ -74,7 +74,19 @@ async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolRe
                 raise ValueError("workspace is outside operator-configured MCP root")
             if any(excluded(part) for part in workspace.relative_to(root).parts):
                 raise ValueError("workspace traverses an excluded source directory")
-            workspace_fd = await asyncio.to_thread(pin_directory_bounded, workspace, root=root)
+            acquisition = asyncio.create_task(
+                asyncio.to_thread(pin_directory_bounded, workspace, root=root)
+            )
+            try:
+                workspace_fd = await asyncio.shield(acquisition)
+            except asyncio.CancelledError:
+                try:
+                    late_fd = await asyncio.shield(acquisition)
+                except Exception:
+                    pass
+                else:
+                    os.close(late_fd)
+                raise
             request = request.model_copy(update={"workspace": str(workspace)})
 
         async def with_workspace(function: Any, *args: Any) -> Any:

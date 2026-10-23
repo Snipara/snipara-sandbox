@@ -35,6 +35,7 @@ def test_receipt_revalidation_detects_sources_commands_images_and_artifacts(tmp_
     (directory / "output.log").write_bytes(b"pass")
     receipt = {
         "schema_version": "snipara.sandbox.validation.v1",
+        "run_id": run_id,
         "request_sha256": request_hash(request),
         "snapshot": capture(project),
         "image_id": "sha256:one",
@@ -77,10 +78,55 @@ def test_recovery_refuses_another_runs_container(tmp_path):
     directory = tmp_path / run_id
     directory.mkdir()
     (directory / "receipt.json").write_text(
-        json.dumps({"run_id": run_id, "status": "running", "container_id": "owned-id"})
+        json.dumps(
+            {
+                "schema_version": "snipara.sandbox.validation.v1",
+                "run_id": run_id,
+                "status": "running",
+                "container_id": "owned-id",
+            }
+        )
     )
     client = Mock()
     client.containers.get.return_value.labels = {"com.snipara.sandbox.validation": "other"}
     with pytest.raises(ValueError, match="ownership"):
         recover(tmp_path, run_id, client=client)
     client.containers.get.return_value.remove.assert_not_called()
+
+
+def test_symlinked_store_ancestor_never_creates_external_files(tmp_path):
+    from rlm.validation.runner import run
+
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (project / ".snipara").symlink_to(outside, target_is_directory=True)
+    request = ValidationRequest(
+        workspace=str(project), argv=["python", "test.py"], image="python:local"
+    )
+    with pytest.raises(ValueError, match="symlink"):
+        run(request, project / ".snipara/validation", client=Mock())
+    assert list(outside.iterdir()) == []
+
+
+def test_receipt_identity_cannot_redirect_a_cancel(tmp_path):
+    from rlm.validation.runner import cancel
+
+    run_id = "a" * 32
+    folder = tmp_path / run_id
+    folder.mkdir()
+    (folder / "receipt.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "snipara.sandbox.validation.v1",
+                "run_id": "b" * 32,
+                "container_id": "other",
+                "status": "running",
+            }
+        )
+    )
+    client = Mock()
+    with pytest.raises(ValueError, match="identity"):
+        cancel(tmp_path, run_id, client=client)
+    client.containers.get.assert_not_called()

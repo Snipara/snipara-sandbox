@@ -11,6 +11,7 @@ from typing import Any
 from mcp.types import CallToolResult, TextContent, Tool
 
 from rlm.validation.models import ValidationRequest
+from rlm.validation.paths import secure_path
 from rlm.validation.runner import cancel, diagnose, read_run, recover, run, verify
 
 NAMES = {
@@ -58,7 +59,9 @@ def validation_tools() -> list[Tool]:
 async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolResult:
     try:
         root = root.resolve(strict=True)
-        store = root / ".snipara/validation"
+        store = secure_path(root / ".snipara/validation")
+        if not store.resolve().is_relative_to(root):
+            raise ValueError("MCP store escapes configured root")
         request = None
         if "request" in arguments:
             request = ValidationRequest.model_validate(arguments["request"])
@@ -99,6 +102,7 @@ async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolRe
                 "cancelled",
                 "environment_incompatible",
                 "cleanup_failed",
+                "artifact_error",
             }
             or value.get("valid") is False
             or value.get("ready") is False

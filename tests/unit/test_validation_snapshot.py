@@ -45,3 +45,13 @@ def test_mode_and_exclusion_changes_are_identity_changes(tmp_path):
     original = capture(tmp_path)["sha256"]
     source.chmod(0o755)
     assert capture(tmp_path)["sha256"] != original
+
+
+def test_directory_entry_budget_bounds_metadata(tmp_path, monkeypatch):
+    import rlm.validation.snapshot as snapshots
+
+    monkeypatch.setattr(snapshots, "MAX_ENTRIES", 2)
+    for index in range(3):
+        (tmp_path / str(index)).write_text("small")
+    with pytest.raises(ValueError, match="entry/path"):
+        capture(tmp_path)

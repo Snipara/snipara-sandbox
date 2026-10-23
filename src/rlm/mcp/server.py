@@ -366,9 +366,11 @@ def create_server() -> Server:
     server = Server("SniparaSandbox")
 
     # Load config to get trust level and execution environment defaults.
+    validation_config_error = False
     try:
         config = load_config()
     except Exception:
+        validation_config_error = True
         config = RLMConfig()
 
     # Session manager for multi-session support
@@ -641,6 +643,16 @@ def create_server() -> Server:
         session_id = arguments.get("session_id")
 
         if name in VALIDATION_NAMES:
+            if validation_config_error or not config.docker_mount_workspace:
+                return CallToolResult(
+                    content=[
+                        TextContent(
+                            type="text",
+                            text="Repository validation requires a valid operator configuration with workspace access enabled.",
+                        )
+                    ],
+                    isError=True,
+                )
             return await handle_validation(
                 name, arguments, config.docker_workspace_path or Path.cwd()
             )

@@ -33,7 +33,7 @@ dependencies = [
 docker = ["docker>=7.0.0"]
 wasm = ["pyodide-py>=0.24.0"]
 snipara = ["snipara-mcp>=1.3.0"]
-mcp = ["mcp>=1.0.0"]
+mcp = ["mcp>=1.13.0,<2"]
 visualizer = ["streamlit>=1.30.0", "plotly>=5.18.0"]
 dev = [
     "pytest>=8.0.0",
@@ -41,7 +41,7 @@ dev = [
     "pytest-cov>=4.1.0",
     "ruff>=0.2.0",
     "mypy>=1.8.0",
-    "mcp>=1.0.0",
+    "mcp>=1.13.0,<2",
     "docker>=7.0.0",
     "streamlit>=1.30.0",
     "plotly>=5.18.0",

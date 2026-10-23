@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from rlm.validation.models import ValidationRequest
+from rlm.validation.paths import secure_path
 from rlm.validation.runner import canonical, diagnose
 
 PROMPT = "Snipara Sandbox n'est pas disponible pour ces tests. Souhaitez-vous utiliser un autre environnement, installer/configurer Sandbox, ou continuer sans Sandbox ?"
@@ -54,7 +55,7 @@ def record_choice(
         "created_at": time.time(),
         "expires_at": time.time() + 86400,
     }
-    path = choice_path(request, scope)
+    path = secure_path(choice_path(request, scope))
     if path.parent.is_symlink() or (path.parent.parent).is_symlink() or path.is_symlink():
         raise ValueError("symlink decision store refused")
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -67,7 +68,7 @@ def gate(
     request: ValidationRequest, scope: str, *, readiness: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     identity = scope_identity(request, scope)
-    path = choice_path(request, scope)
+    path = secure_path(choice_path(request, scope))
     choice = None
     if path.exists():
         if path.is_symlink() or path.parent.is_symlink():

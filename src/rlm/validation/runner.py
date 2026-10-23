@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from rlm.validation.models import SCHEMA, ValidationRequest
+from rlm.validation.paths import secure_path
 from rlm.validation.profiles import probe_script
 from rlm.validation.snapshot import capture
 
@@ -77,10 +79,20 @@ def _write(directory: Path, receipt: dict[str, Any]) -> None:
 def read_run(store: Path, run_id: str) -> dict[str, Any]:
     if not RUN_ID.fullmatch(run_id):
         raise ValueError("invalid run id")
-    target = store / run_id / "receipt.json"
+    store = secure_path(store)
+    target = secure_path(store / run_id / "receipt.json")
     if target.is_symlink() or target.parent.is_symlink():
         raise ValueError("symlink receipt refused")
-    return json.loads(target.read_text())
+    if target.stat().st_size > 8 * 1024 * 1024:
+        raise ValueError("receipt exceeds byte budget")
+    value = json.loads(target.read_text())
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != SCHEMA
+        or value.get("run_id") != run_id
+    ):
+        raise ValueError("receipt schema or run identity mismatch")
+    return value
 
 
 def diagnose(request: ValidationRequest, *, client: Any = None) -> dict[str, Any]:
@@ -198,6 +210,7 @@ def run(
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     """Run a snapshot once, with explicit lifecycle ownership and durable evidence."""
+    store = secure_path(store)
     project = Path(request.workspace).resolve()
     resolved_store = store.resolve()
     if resolved_store == project or (
@@ -229,17 +242,48 @@ def run(
     container = None
     owned = client is None
     started = time.monotonic()
+    deadline = started + request.timeout_seconds
+    monitor_stop = threading.Event()
+    abort: dict[str, str] = {}
+
+    def monitor() -> None:
+        while not monitor_stop.wait(0.05):
+            reason = (
+                "cancelled"
+                if (
+                    (directory / "cancel-requested").exists()
+                    or (cancel_event is not None and cancel_event.is_set())
+                )
+                else ("timeout" if time.monotonic() >= deadline else "")
+            )
+            if reason:
+                abort["reason"] = reason
+                if container is not None:
+                    try:
+                        container.kill()
+                    except Exception:
+                        pass
+                    return
+
+    watcher = threading.Thread(target=monitor, daemon=True)
+    watcher.start()
     try:
         client = client or docker_client()
         client.ping()
         image = client.images.get(request.image)
         receipt["image_id"] = image.id
-        with tempfile.TemporaryDirectory(prefix="snipara-validation-") as temporary:
+        if image.attrs.get("Config", {}).get("Volumes"):
+            raise ValueError("image-declared volumes bypass validation disk limits")
+        with tempfile.TemporaryDirectory(prefix="snipara-validation-" + run_id + "-") as temporary:
             snapshot = Path(temporary)
             snapshot.chmod(0o755)
+            receipt["snapshot_path"] = str(snapshot.resolve())
+            _write(directory, receipt)
             receipt["snapshot"] = capture(Path(request.workspace), snapshot)
             if not (snapshot / request.cwd).is_dir():
                 raise ValueError("cwd missing from snapshot")
+            if abort:
+                raise TimeoutError("validation budget expired during preparation")
             # argv remains positional; only this fixed bootstrap runs through sh.
             bootstrap = (
                 "("
@@ -249,13 +293,13 @@ def run(
             )
             container = client.containers.create(
                 image.id,
-                command=["/bin/sh", "-c", "while :; do sleep 3600; done"],
+                command=["sleep", str(request.timeout_seconds + 15)],
                 name="snipara-validation-" + run_id,
                 labels={LABEL: run_id},
                 volumes={str(snapshot): {"bind": "/input", "mode": "ro"}},
                 tmpfs={
-                    "/work": f"rw,nosuid,nodev,size={request.disk_mb}m,mode=1777",
-                    "/tmp": "rw,nosuid,nodev,size=64m,mode=1777",
+                    "/work": f"rw,exec,nosuid,nodev,size={request.disk_mb}m,mode=1777",
+                    "/tmp": "rw,exec,nosuid,nodev,size=64m,mode=1777",
                 },
                 read_only=True,
                 user="65534:65534",
@@ -283,7 +327,6 @@ def run(
                 ["/bin/sh", "-c", bootstrap, "sandbox", "/work/" + request.cwd, *request.argv],
             )["Id"]
             client.api.exec_start(execution, detach=True)
-            deadline = time.monotonic() + request.timeout_seconds
             while True:
                 state = client.api.exec_inspect(execution)
                 if not state["Running"]:
@@ -320,11 +363,17 @@ def run(
             log = redact(output[:MAX_LOG].decode("utf-8", errors="replace"))
             (directory / "output.log").write_text(log)
             receipt["log_sha256"] = hashlib.sha256(log.encode()).hexdigest()
-            if request.artifacts and receipt["status"] == "passed":
-                receipt["artifacts"] = _collect(container, directory, request.artifacts)
+            if request.artifacts and receipt["status"] in {"passed", "failed"}:
+                try:
+                    receipt["artifacts"] = _collect(container, directory, request.artifacts)
+                except Exception as error:
+                    receipt["artifact_error"] = redact(str(error))[:2000]
+                    if receipt["status"] == "passed":
+                        receipt["status"] = "artifact_error"
     except Exception as error:
         receipt.update(
-            status="cancelled" if (directory / "cancel-requested").exists() else "error",
+            status=abort.get("reason")
+            or ("cancelled" if (directory / "cancel-requested").exists() else "error"),
             error=redact(str(error))[:2000],
         )
     except KeyboardInterrupt:
@@ -340,6 +389,10 @@ def run(
                     receipt["status"] = "cleanup_failed"
         else:
             receipt["cleanup_complete"] = True
+        monitor_stop.set()
+        watcher.join(timeout=12)
+        if abort.get("reason"):
+            receipt["status"] = abort["reason"]
         receipt["duration_ms"] = int((time.monotonic() - started) * 1000)
         receipt["finished_at"] = time.time()
         _write(directory, receipt)
@@ -385,7 +438,7 @@ def verify(
         or hashlib.sha256(log.read_bytes()).hexdigest() != receipt.get("log_sha256")
     ):
         reasons.append("log_changed")
-    if receipt.get("status") != "passed" or not receipt.get("cleanup_complete"):
+    if receipt.get("status") != "passed" or receipt.get("cleanup_complete") is not True:
         reasons.append("run_not_accepted")
     return {
         "schema_version": SCHEMA,
@@ -418,6 +471,15 @@ def recover(store: Path, run_id: str, *, client: Any = None) -> dict[str, Any]:
             if container.labels.get(LABEL) != run_id:
                 raise ValueError("container ownership mismatch")
             container.remove(force=True, v=True)
+        if receipt.get("snapshot_path"):
+            snapshot = secure_path(Path(receipt["snapshot_path"]))
+            expected_parent = Path(tempfile.gettempdir()).resolve()
+            if snapshot.parent != expected_parent or not snapshot.name.startswith(
+                "snipara-validation-" + run_id + "-"
+            ):
+                raise ValueError("snapshot recovery ownership mismatch")
+            if snapshot.exists():
+                shutil.rmtree(snapshot)
         receipt.update(status="interrupted", cleanup_complete=True, recovered_at=time.time())
         _write(store / run_id, receipt)
         return receipt

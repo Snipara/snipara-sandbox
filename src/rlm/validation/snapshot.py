@@ -51,6 +51,8 @@ SECRET_NAMES = frozenset(
     }
 )
 MAX_FILES = 20000
+MAX_ENTRIES = 40000
+MAX_PATH_BYTES = 1024 * 1024
 MAX_BYTES = 64 * 1024 * 1024
 
 
@@ -72,8 +74,14 @@ def capture(workspace: Path, destination: Path | None = None) -> dict[str, Any]:
     files: list[dict[str, Any]] = []
     omissions: list[str] = []
     total = 0
+    entries = 0
+    path_bytes = 0
     for folder, dirs, names, fd in os.fwalk(root, follow_symlinks=False):
         rel = Path(folder).relative_to(root)
+        entries += len(dirs) + len(names)
+        path_bytes += sum(len((rel / name).as_posix().encode()) for name in [*dirs, *names])
+        if entries > MAX_ENTRIES or path_bytes > MAX_PATH_BYTES:
+            raise ValueError("snapshot exceeds entry/path budget")
         for name in sorted(dirs[:]):
             item = (rel / name).as_posix()
             if excluded(name):
@@ -91,7 +99,11 @@ def capture(workspace: Path, destination: Path | None = None) -> dict[str, Any]:
                 raise ValueError(f"non-regular source refused: {item}")
             if len(files) >= MAX_FILES or info.st_size + total > MAX_BYTES:
                 raise ValueError("snapshot exceeds file/byte budget")
-            with os.fdopen(os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd), "rb") as source:
+            with os.fdopen(
+                os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd), "rb"
+            ) as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    raise ValueError(f"non-regular source refused after open: {item}")
                 data = source.read(MAX_BYTES - total + 1)
             total += len(data)
             if total > MAX_BYTES:

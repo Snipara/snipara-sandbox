@@ -1,6 +1,7 @@
 """Real Docker acceptance controls; opt in explicitly to require a daemon."""
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -42,10 +43,13 @@ def test_real_python_write_failure_timeout_and_no_source_mutation(tmp_path):
             request.model_copy(update={"timeout_seconds": 1, "artifacts": []}), store, client=client
         )
         assert timeout["status"] == "timeout" and timeout["cleanup_complete"]
-        assert (
-            client.containers.list(all=True, filters={"label": "com.snipara.sandbox.validation"})
-            == []
-        )
+        for owned in (receipt, failed, timeout):
+            assert (
+                client.containers.list(
+                    all=True, filters={"label": "com.snipara.sandbox.validation=" + owned["run_id"]}
+                )
+                == []
+            )
     finally:
         client.close()
 
@@ -135,3 +139,113 @@ def test_real_cancel_log_budget_and_filtered_credentials(tmp_path):
         assert cancel(store, active)["cancel_requested"]
         result = future.result(timeout=15)
     assert result["status"] == "cancelled" and result["cleanup_complete"]
+
+
+def test_real_fifo_collection_deadline_and_image_volume_refusal(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "check.py").write_text(
+        "import os\nos.unlink('/tmp/runtime-versions')\nos.mkfifo('/tmp/runtime-versions')\n"
+    )
+    request = ValidationRequest(
+        workspace=str(project),
+        argv=["python", "check.py"],
+        image="python:3.11-slim",
+        timeout_seconds=2,
+    )
+    result = run(request, tmp_path / "runs")
+    assert result["status"] == "timeout" and result["cleanup_complete"], result
+    assert result["duration_ms"] < 15000
+    volume_image = os.environ.get("SNIPARA_VOLUME_IMAGE")
+    if volume_image:
+        refused = run(request.model_copy(update={"image": volume_image}), tmp_path / "runs")
+        assert refused["status"] == "error" and "image-declared volumes" in refused["error"]
+        assert "container_id" not in refused
+
+
+def test_real_nonroot_offline_and_disk_budget(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "check.py").write_text("""import errno,os,socket
+assert os.getuid() == 65534
+try:
+    socket.create_connection(('1.1.1.1',80),timeout=0.5)
+except OSError:
+    pass
+else:
+    raise AssertionError('network unexpectedly available')
+try:
+    with open('large.bin','wb') as target:
+        for _ in range(40):target.write(b'x'*1024*1024)
+except OSError as error:
+    assert error.errno == errno.ENOSPC
+else:
+    raise AssertionError('disk quota not enforced')
+""")
+    request = ValidationRequest(
+        workspace=str(project),
+        argv=["python", "check.py"],
+        image="python:3.11-slim",
+        disk_mb=16,
+        memory_mb=64,
+        pids=16,
+    )
+    result = run(request, tmp_path / "runs")
+    assert result["status"] == "passed", result
+    assert not (project / "large.bin").exists()
+
+
+def test_real_owner_process_crash_recovery(tmp_path):
+    import json
+    import subprocess
+    import sys
+    import time
+
+    from rlm.validation.runner import recover
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "check.py").write_text("import time\ntime.sleep(60)")
+    request = ValidationRequest(
+        workspace=str(project), argv=["python", "check.py"], image="python:3.11-slim"
+    )
+    config = tmp_path / "request.json"
+    config.write_text(request.model_dump_json())
+    store = tmp_path / "runs"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "rlm.cli.main",
+            "validation",
+            "run",
+            "--request",
+            str(config),
+            "--store",
+            str(store),
+        ],
+        env={**os.environ, "PYTHONPATH": "src"},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    receipt = None
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            for path in store.glob("*/receipt.json"):
+                value = json.loads(path.read_text())
+                if value["status"] == "running":
+                    receipt = value
+            if receipt:
+                break
+            time.sleep(0.1)
+        assert receipt
+        process.kill()
+        process.wait(timeout=5)
+        result = recover(store, receipt["run_id"])
+        assert result["status"] == "interrupted" and result["cleanup_complete"]
+        assert not Path(receipt["snapshot_path"]).exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)

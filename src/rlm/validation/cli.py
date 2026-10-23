@@ -38,7 +38,15 @@ def run_command(
     request: Path = typer.Option(..., exists=True, dir_okay=False),
     store: Path = typer.Option(Path(".snipara/validation")),
 ) -> None:
-    result = run(load_request(request), store)
+    import signal
+    import threading
+
+    event = threading.Event()
+    previous = signal.signal(signal.SIGTERM, lambda *_: event.set())
+    try:
+        result = run(load_request(request), store, cancel_event=event)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
     output(result)
     if result["status"] != "passed":
         raise typer.Exit(1)

@@ -76,7 +76,11 @@ def capture(workspace: Path, destination: Path | None = None) -> dict[str, Any]:
     total = 0
     entries = 0
     path_bytes = 0
-    for folder, dirs, names, fd in os.fwalk(root, follow_symlinks=False):
+
+    def fail_walk(error: OSError) -> None:
+        raise error
+
+    for folder, dirs, names, fd in os.fwalk(root, follow_symlinks=False, onerror=fail_walk):
         rel = Path(folder).relative_to(root)
         entries += len(dirs) + len(names)
         path_bytes += sum(len((rel / name).as_posix().encode()) for name in [*dirs, *names])

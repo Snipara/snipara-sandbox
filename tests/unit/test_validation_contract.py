@@ -51,3 +51,13 @@ def test_deterministic_validation_does_not_load_inference_stack():
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("cpus", [1e-12, 0.001, 0.009999])
+def test_cpu_quota_cannot_round_to_unlimited(cpus):
+    with pytest.raises(ValidationError):
+        request(cpus=cpus)
+
+
+def test_minimum_cpu_quota_stays_positive():
+    assert int(request(cpus=0.01).cpus * 1_000_000_000) == 10_000_000

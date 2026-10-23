@@ -55,3 +55,19 @@ def test_directory_entry_budget_bounds_metadata(tmp_path, monkeypatch):
         (tmp_path / str(index)).write_text("small")
     with pytest.raises(ValueError, match="entry/path"):
         capture(tmp_path)
+
+
+def test_unreadable_subtree_is_fatal_not_a_reduced_snapshot(tmp_path):
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root bypasses filesystem read permissions")
+    hidden = tmp_path / "required-tests"
+    hidden.mkdir()
+    (hidden / "test.py").write_text("required")
+    hidden.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            capture(tmp_path)
+    finally:
+        hidden.chmod(0o700)

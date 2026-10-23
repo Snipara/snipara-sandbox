@@ -21,7 +21,7 @@ class ValidationRequest(BaseModel):
     profile: Literal["python", "node", "mixed"] = "python"
     cwd: str = "."
     timeout_seconds: int = Field(default=120, ge=1, le=900)
-    cpus: float = Field(default=2.0, gt=0, le=8)
+    cpus: float = Field(default=2.0, ge=0.01, le=8)
     memory_mb: int = Field(default=2048, ge=64, le=8192)
     pids: int = Field(default=128, ge=16, le=512)
     disk_mb: int = Field(default=2048, ge=16, le=4096)

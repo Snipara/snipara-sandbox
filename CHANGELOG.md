@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### 2.3.0 candidate
+
+- Add account-free, LLM-free repository validation through CLI and six MCP tools, with Python/Node/mixed prepared-image profiles.
+- Capture filtered descriptor-owned snapshots, run non-root offline Docker jobs with aggregate resource limits, and export bounded logs/artifacts tied to exact source, request and image identities.
+- Bound source acquisition, daemon transactions and collection in disposable owner helpers; handle timeout, cancellation, explicit crash recovery and unconfirmed cleanup honestly.
+- Add scoped explicit environment-choice receipts without silent host execution or waived proof requirements. Qualify macOS/Linux local Docker; legacy REPL and hostile multi-tenancy remain separate.
+- Exclude local JavaScript dependencies and workflow state from source distributions. This candidate is not yet published.
+
 ## [2.2.7] - 2026-05-31
 
 ### Added

@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import os
 import re
 import shutil
 import subprocess
-import tarfile
 import tempfile
 import threading
 import time
 import uuid
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from rlm.validation.artifact_readers import NODE_READER, PYTHON_READER
 from rlm.validation.models import SCHEMA, ValidationRequest
 from rlm.validation.paths import secure_path
 from rlm.validation.profiles import probe_script
@@ -166,39 +166,43 @@ def cancel(store: Path, run_id: str, *, client: Any = None) -> dict[str, Any]:
             client.close()
 
 
-def _collect(container: Any, directory: Path, paths: list[str]) -> list[dict[str, Any]]:
+def _collect(
+    container: Any, directory: Path, paths: list[str], profile: str, client: Any
+) -> list[dict[str, Any]]:
     artifacts = []
     total = 0
     for index, relative in enumerate(paths):
-        stream = container.exec_run(
-            ["tar", "-C", "/work", "-cf", "-", "--", relative], stream=True
-        ).output
-        archive = bytearray()
-        for chunk in stream:
-            archive.extend(chunk)
-            if len(archive) > MAX_ARTIFACT_BYTES:
-                raise ValueError("artifact archive exceeds budget")
-        with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
-            for item in tar:
-                if not item.isfile() or item.name.startswith("/") or ".." in Path(item.name).parts:
-                    raise ValueError("artifact must be a regular file without links")
-                total += item.size
-                if total > MAX_ARTIFACT_BYTES or len(artifacts) >= 128:
-                    raise ValueError("artifacts exceed budget")
-                source = tar.extractfile(item)
-                if source is None:
-                    raise ValueError("missing artifact bytes")
-                data = source.read(MAX_ARTIFACT_BYTES + 1)
-                name = f"artifact-{index}-{len(artifacts)}"
-                (directory / name).write_bytes(data)
-                artifacts.append(
-                    {
-                        "requested_path": relative,
-                        "name": name,
-                        "sha256": hashlib.sha256(data).hexdigest(),
-                        "size": len(data),
-                    }
-                )
+        remaining = MAX_ARTIFACT_BYTES - total
+        argv = (
+            ["node", "-e", NODE_READER, relative, str(remaining)]
+            if profile == "node"
+            else ["python", "-c", PYTHON_READER, relative, str(remaining)]
+        )
+        execution = client.api.exec_create(container.id, argv, stdout=True, stderr=False)["Id"]
+        stream = client.api.exec_start(execution, stream=True)
+        data = bytearray()
+        try:
+            for chunk in stream:
+                data.extend(chunk)
+                if len(data) > remaining:
+                    raise ValueError("artifacts exceed byte budget")
+        finally:
+            with suppress(OSError):
+                stream.close()
+        state = client.api.exec_inspect(execution)
+        if state.get("Running") or state.get("ExitCode") != 0:
+            raise ValueError("requested artifact could not be safely exported: " + relative)
+        total += len(data)
+        name = f"artifact-{index}-0"
+        (directory / name).write_bytes(data)
+        artifacts.append(
+            {
+                "requested_path": relative,
+                "name": name,
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "size": len(data),
+            }
+        )
     return artifacts
 
 
@@ -365,7 +369,9 @@ def run(
             receipt["log_sha256"] = hashlib.sha256(log.encode()).hexdigest()
             if request.artifacts and receipt["status"] in {"passed", "failed"}:
                 try:
-                    receipt["artifacts"] = _collect(container, directory, request.artifacts)
+                    receipt["artifacts"] = _collect(
+                        container, directory, request.artifacts, request.profile, client
+                    )
                 except Exception as error:
                     receipt["artifact_error"] = redact(str(error))[:2000]
                     if receipt["status"] == "passed":
@@ -438,6 +444,8 @@ def verify(
         or hashlib.sha256(log.read_bytes()).hexdigest() != receipt.get("log_sha256")
     ):
         reasons.append("log_changed")
+    if [item.get("requested_path") for item in receipt.get("artifacts", [])] != request.artifacts:
+        reasons.append("artifacts_incomplete")
     if receipt.get("status") != "passed" or receipt.get("cleanup_complete") is not True:
         reasons.append("run_not_accepted")
     return {

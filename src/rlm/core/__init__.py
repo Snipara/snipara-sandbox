@@ -25,7 +25,6 @@ from rlm.core.exceptions import (
     ToolNotFoundError,
     ToolValidationError,
 )
-from rlm.core.orchestrator import RLM
 from rlm.core.types import (
     CompletionOptions,
     Message,
@@ -75,3 +74,12 @@ __all__ = [
     "ConfigNotFoundError",
     "ConfigValidationError",
 ]
+
+
+def __getattr__(name: str):
+    if name == "RLM":
+        from rlm.core.orchestrator import RLM
+
+        globals()[name] = RLM
+        return RLM
+    raise AttributeError(name)

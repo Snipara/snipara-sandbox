@@ -1,7 +1,6 @@
 """LLM backend adapters."""
 
 from rlm.backends.base import BackendResponse, BaseBackend, Tool
-from rlm.backends.litellm import LiteLLMBackend
 
 __all__ = [
     "BackendResponse",
@@ -9,3 +8,12 @@ __all__ = [
     "Tool",
     "LiteLLMBackend",
 ]
+
+
+def __getattr__(name: str):
+    if name == "LiteLLMBackend":
+        from rlm.backends.litellm import LiteLLMBackend
+
+        globals()[name] = LiteLLMBackend
+        return LiteLLMBackend
+    raise AttributeError(name)

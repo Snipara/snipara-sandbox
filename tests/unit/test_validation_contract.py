@@ -32,3 +32,22 @@ def test_contract_is_provider_independent():
 def test_invalid_scopes_and_limits(changes):
     with pytest.raises(ValidationError):
         request(**changes)
+
+
+def test_deterministic_validation_does_not_load_inference_stack():
+    import os
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import rlm.validation.runner; assert 'litellm' not in sys.modules",
+        ],
+        env={**os.environ, "PYTHONPATH": "src"},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr

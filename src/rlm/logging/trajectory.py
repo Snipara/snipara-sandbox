@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -13,6 +13,9 @@ import structlog
 from rlm.core.types import TrajectoryEvent
 
 logger = structlog.get_logger()
+
+
+UTC = timezone.utc
 
 
 class TrajectoryLogger:

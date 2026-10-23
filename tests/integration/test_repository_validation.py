@@ -249,3 +249,35 @@ def test_real_owner_process_crash_recovery(tmp_path):
         if process.poll() is None:
             process.kill()
             process.wait(timeout=5)
+
+
+@pytest.mark.parametrize(
+    "profile,image,program,argv",
+    [
+        (
+            "python",
+            "python:3.11-slim",
+            "from pathlib import Path\nPath('escape').symlink_to('/etc', target_is_directory=True)\n",
+            ["python", "check.py"],
+        ),
+        (
+            "node",
+            "node:24-bookworm-slim",
+            "require('node:fs').symlinkSync('/etc','escape')",
+            ["node", "check.js"],
+        ),
+    ],
+)
+def test_real_artifact_links_and_missing_outputs_are_refused(
+    tmp_path, profile, image, program, argv
+):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / argv[1]).write_text(program)
+    request = ValidationRequest(
+        workspace=str(project), argv=argv, image=image, profile=profile, artifacts=["escape/passwd"]
+    )
+    escaped = run(request, tmp_path / "runs")
+    assert escaped["status"] == "artifact_error" and escaped["artifacts"] == [], escaped
+    missing = run(request.model_copy(update={"artifacts": ["missing.txt"]}), tmp_path / "runs")
+    assert missing["status"] == "artifact_error" and missing["artifacts"] == [], missing

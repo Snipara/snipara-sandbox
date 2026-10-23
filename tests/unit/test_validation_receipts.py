@@ -27,7 +27,10 @@ def test_receipt_revalidation_detects_sources_commands_images_and_artifacts(tmp_
     directory = store / run_id
     directory.mkdir(parents=True)
     request = ValidationRequest(
-        workspace=str(project), argv=["python", "test.py"], image="python:local"
+        workspace=str(project),
+        argv=["python", "test.py"],
+        image="python:local",
+        artifacts=["output.txt"],
     )
     client = Mock()
     client.images.get.return_value.id = "sha256:one"
@@ -42,7 +45,13 @@ def test_receipt_revalidation_detects_sources_commands_images_and_artifacts(tmp_
         "status": "passed",
         "cleanup_complete": True,
         "log_sha256": hashlib.sha256(b"pass").hexdigest(),
-        "artifacts": [{"name": "artifact-0-0", "sha256": hashlib.sha256(b"ok").hexdigest()}],
+        "artifacts": [
+            {
+                "name": "artifact-0-0",
+                "requested_path": "output.txt",
+                "sha256": hashlib.sha256(b"ok").hexdigest(),
+            }
+        ],
     }
     (directory / "receipt.json").write_bytes(canonical(receipt))
     assert verify(request, store, run_id, client=client)["valid"]
@@ -103,7 +112,10 @@ def test_symlinked_store_ancestor_never_creates_external_files(tmp_path):
     outside.mkdir()
     (project / ".snipara").symlink_to(outside, target_is_directory=True)
     request = ValidationRequest(
-        workspace=str(project), argv=["python", "test.py"], image="python:local"
+        workspace=str(project),
+        argv=["python", "test.py"],
+        image="python:local",
+        artifacts=["output.txt"],
     )
     with pytest.raises(ValueError, match="symlink"):
         run(request, project / ".snipara/validation", client=Mock())
@@ -130,3 +142,36 @@ def test_receipt_identity_cannot_redirect_a_cancel(tmp_path):
     with pytest.raises(ValueError, match="identity"):
         cancel(tmp_path, run_id, client=client)
     client.containers.get.assert_not_called()
+
+
+def test_missing_requested_artifact_cannot_verify_as_a_pass(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    request = ValidationRequest(
+        workspace=str(project),
+        argv=["python", "test.py"],
+        image="python:local",
+        artifacts=["report.xml"],
+    )
+    run_id = "c" * 32
+    directory = tmp_path / "runs" / run_id
+    directory.mkdir(parents=True)
+    (directory / "output.log").write_bytes(b"")
+    receipt = {
+        "schema_version": "snipara.sandbox.validation.v1",
+        "run_id": run_id,
+        "request_sha256": request_hash(request),
+        "snapshot": capture(project),
+        "image_id": "sha256:one",
+        "status": "passed",
+        "cleanup_complete": True,
+        "log_sha256": hashlib.sha256(b"").hexdigest(),
+        "artifacts": [],
+    }
+    (directory / "receipt.json").write_bytes(canonical(receipt))
+    client = Mock()
+    client.images.get.return_value.id = "sha256:one"
+    assert (
+        "artifacts_incomplete"
+        in verify(request, tmp_path / "runs", run_id, client=client)["reasons"]
+    )

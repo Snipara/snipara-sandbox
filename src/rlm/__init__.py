@@ -1,7 +1,6 @@
 """Legacy RLM import surface for Snipara Sandbox."""
 
 from rlm.core.config import RLMConfig, load_config
-from rlm.core.orchestrator import RLM, SniparaSandbox
 from rlm.core.types import (
     CompletionOptions,
     Message,
@@ -17,7 +16,6 @@ from rlm.tools.registry import ToolRegistry
 __version__ = "2.3.0"
 
 SniparaSandboxConfig = RLMConfig
-Sandbox = SniparaSandbox
 
 __all__ = [
     # Main class
@@ -40,3 +38,15 @@ __all__ = [
     "Tool",
     "ToolRegistry",
 ]
+
+
+def __getattr__(name: str):
+    # Deterministic validation must not import provider integrations or fetch
+    # pricing metadata merely to start a CLI or inspect a request.
+    if name in {"RLM", "SniparaSandbox", "Sandbox"}:
+        from rlm.core.orchestrator import RLM, SniparaSandbox
+
+        values = {"RLM": RLM, "SniparaSandbox": SniparaSandbox, "Sandbox": SniparaSandbox}
+        globals().update(values)
+        return values[name]
+    raise AttributeError(name)

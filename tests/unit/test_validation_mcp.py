@@ -7,7 +7,7 @@ from rlm.validation.mcp import handle, validation_tools
 
 def test_public_validation_tools_expose_contract_without_account():
     tools = {tool.name: tool for tool in validation_tools()}
-    assert len(tools) == 5
+    assert len(tools) == 6
     assert (
         tools["validation_run"].inputSchema["properties"]["request"]["additionalProperties"]
         is False

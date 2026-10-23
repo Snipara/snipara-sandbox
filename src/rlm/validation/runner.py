@@ -395,3 +395,32 @@ def verify(
         "continuity": "historical_proof_only",
         "receipt": receipt,
     }
+
+
+def recover(store: Path, run_id: str, *, client: Any = None) -> dict[str, Any]:
+    """Explicit recovery after owner process loss; never sweep unrelated resources."""
+    receipt = read_run(store, run_id)
+    if receipt["status"] not in {"preparing", "running"} and receipt.get("cleanup_complete"):
+        return receipt
+    owned = client is None
+    try:
+        client = client or docker_client()
+        try:
+            container = client.containers.get(
+                receipt.get("container_id") or "snipara-validation-" + run_id
+            )
+        except Exception as error:
+            from docker.errors import NotFound
+
+            if not isinstance(error, NotFound):
+                raise
+        else:
+            if container.labels.get(LABEL) != run_id:
+                raise ValueError("container ownership mismatch")
+            container.remove(force=True, v=True)
+        receipt.update(status="interrupted", cleanup_complete=True, recovered_at=time.time())
+        _write(store / run_id, receipt)
+        return receipt
+    finally:
+        if owned and client is not None:
+            client.close()

@@ -101,3 +101,12 @@ def choose_command(
             environment=environment,
         )
     )
+
+
+@app.command("recover")
+def recover_command(
+    run_id: str = typer.Option(...), store: Path = typer.Option(Path(".snipara/validation"))
+) -> None:
+    from rlm.validation.runner import recover
+
+    output(recover(store, run_id))

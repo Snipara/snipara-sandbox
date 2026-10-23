@@ -12,6 +12,10 @@ from typing import Any
 EXCLUDED_DIRS = frozenset(
     {
         ".git",
+        ".codex",
+        ".claude",
+        ".cache",
+        "htmlcov",
         ".hg",
         ".svn",
         ".snipara",
@@ -32,6 +36,8 @@ EXCLUDED_DIRS = frozenset(
 )
 SECRET_NAMES = frozenset(
     {
+        ".coverage",
+        "coverage.xml",
         "credentials",
         "credentials.json",
         ".npmrc",

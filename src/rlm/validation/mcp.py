@@ -11,7 +11,7 @@ from typing import Any
 from mcp.types import CallToolResult, TextContent, Tool
 
 from rlm.validation.models import ValidationRequest
-from rlm.validation.runner import cancel, diagnose, read_run, run, verify
+from rlm.validation.runner import cancel, diagnose, read_run, recover, run, verify
 
 NAMES = {
     "validation_diagnose",
@@ -19,6 +19,7 @@ NAMES = {
     "validation_status",
     "validation_verify",
     "validation_cancel",
+    "validation_recover",
 }
 
 
@@ -30,7 +31,12 @@ def validation_tools() -> list[Tool]:
         if name in {"validation_diagnose", "validation_run", "validation_verify"}:
             properties["request"] = ValidationRequest.model_json_schema()
             required.append("request")
-        if name in {"validation_status", "validation_verify", "validation_cancel"}:
+        if name in {
+            "validation_status",
+            "validation_verify",
+            "validation_cancel",
+            "validation_recover",
+        }:
             properties["run_id"] = {"type": "string", "pattern": "^[a-f0-9]{32}$"}
             required.append("run_id")
         result.append(
@@ -78,6 +84,8 @@ async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolRe
             if request is None:
                 raise ValueError("request required")
             value = await asyncio.to_thread(verify, request, store, arguments["run_id"])
+        elif name == "validation_recover":
+            value = await asyncio.to_thread(recover, store, arguments["run_id"])
         elif name == "validation_cancel":
             value = await asyncio.to_thread(cancel, store, arguments["run_id"])
         else:

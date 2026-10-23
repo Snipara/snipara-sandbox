@@ -77,11 +77,12 @@ File artifacts must be regular files; links and oversized exports are refused.
 
 Timeout and explicit cancellation remove only containers owned by that run.
 Keep evidence before cleaning stores. If the host process is killed abruptly,
-use the recorded container ID and ownership label when recovering its resources;
-never run global container cleanup. Crash recovery is not yet automatic.
+run `validation recover --run-id <id> --store <store>` to remove only its
+label-checked container and record interrupted status. Recovery is explicit, not
+automatic; never run global container cleanup.
 
 MCP exposes `validation_diagnose`, `validation_run`, `validation_status`,
-`validation_verify`, and `validation_cancel`. Repository access is confined to
+`validation_verify`, `validation_cancel`, and `validation_recover`. Repository access is confined to
 `docker_workspace_path` from operator config, or the server's working directory.
 No client-supplied arbitrary host root is accepted. Reload a native client after
 upgrading to load the new schemas. Existing `execute_python` sessions and their

@@ -1,4 +1,5 @@
 import hashlib
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -67,3 +68,19 @@ def test_receipt_revalidation_detects_sources_commands_images_and_artifacts(tmp_
 def test_invalid_run_identity_never_reads_files(tmp_path, run_id):
     with pytest.raises(ValueError):
         read_run(tmp_path, run_id)
+
+
+def test_recovery_refuses_another_runs_container(tmp_path):
+    from rlm.validation.runner import recover
+
+    run_id = "b" * 32
+    directory = tmp_path / run_id
+    directory.mkdir()
+    (directory / "receipt.json").write_text(
+        json.dumps({"run_id": run_id, "status": "running", "container_id": "owned-id"})
+    )
+    client = Mock()
+    client.containers.get.return_value.labels = {"com.snipara.sandbox.validation": "other"}
+    with pytest.raises(ValueError, match="ownership"):
+        recover(tmp_path, run_id, client=client)
+    client.containers.get.return_value.remove.assert_not_called()

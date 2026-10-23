@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from rlm.validation.models import SCHEMA, ValidationRequest
+from rlm.validation.profiles import probe_script
 from rlm.validation.snapshot import capture
 
 LABEL = "com.snipara.sandbox.validation"
@@ -200,7 +201,12 @@ def run(request: ValidationRequest, store: Path, *, client: Any = None) -> dict[
             if not (snapshot / request.cwd).is_dir():
                 raise ValueError("cwd missing from snapshot")
             # argv remains positional; only this fixed bootstrap runs through sh.
-            bootstrap = 'cp -R /input/. /work/ && cd "$1" && shift && exec "$@" > /tmp/validation-output 2>&1'
+            bootstrap = (
+                "("
+                + probe_script(request)
+                + ") || { touch /tmp/profile-error; exit 127; }; "
+                + 'cp -R /input/. /work/ && cd "$1" && shift && exec "$@" > /tmp/validation-output 2>&1'
+            )
             container = client.containers.create(
                 image.id,
                 command=["/bin/sh", "-c", "while :; do sleep 3600; done"],
@@ -260,6 +266,11 @@ def run(request: ValidationRequest, store: Path, *, client: Any = None) -> dict[
                 )
             output = b""
             if receipt["status"] not in {"timeout", "cancelled"}:
+                receipt["runtime_versions"] = container.exec_run(
+                    ["/bin/sh", "-c", "head -c 4096 /tmp/runtime-versions"]
+                ).output.decode("utf-8", errors="replace")
+                if container.exec_run(["test", "-f", "/tmp/profile-error"]).exit_code == 0:
+                    receipt["status"] = "environment_incompatible"
                 output = container.exec_run(
                     ["/bin/sh", "-c", f"head -c {MAX_LOG + 1} /tmp/validation-output"]
                 ).output
@@ -267,7 +278,7 @@ def run(request: ValidationRequest, store: Path, *, client: Any = None) -> dict[
             log = redact(output[:MAX_LOG].decode("utf-8", errors="replace"))
             (directory / "output.log").write_text(log)
             receipt["log_sha256"] = hashlib.sha256(log.encode()).hexdigest()
-            if request.artifacts and receipt["status"] not in {"timeout", "cancelled"}:
+            if request.artifacts and receipt["status"] == "passed":
                 receipt["artifacts"] = _collect(container, directory, request.artifacts)
     except Exception as error:
         receipt.update(status="error", error=redact(str(error))[:2000])

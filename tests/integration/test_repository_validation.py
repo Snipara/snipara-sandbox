@@ -48,3 +48,49 @@ def test_real_python_write_failure_timeout_and_no_source_mutation(tmp_path):
         )
     finally:
         client.close()
+
+
+def test_real_node_and_incompatible_profile(tmp_path):
+    project = tmp_path / "node-project"
+    project.mkdir()
+    (project / "check.js").write_text(
+        "require('node:fs').writeFileSync('built.txt','node works'); console.log(process.version)"
+    )
+    store = tmp_path / "runs"
+    request = ValidationRequest(
+        workspace=str(project),
+        argv=["node", "check.js"],
+        image="node:24-bookworm-slim",
+        profile="node",
+        artifacts=["built.txt"],
+    )
+    passed = run(request, store)
+    assert passed["status"] == "passed", passed
+    assert passed["runtime_versions"].strip()
+    assert not (project / "built.txt").exists()
+    incompatible = run(request.model_copy(update={"profile": "mixed", "artifacts": []}), store)
+    assert incompatible["status"] == "environment_incompatible", incompatible
+    (project / "check.js").write_text("process.exit(9)")
+    failed = run(request.model_copy(update={"artifacts": []}), store)
+    assert failed["status"] == "failed" and failed["exit_code"] == 9
+
+
+def test_real_mixed_profile(tmp_path):
+    image = os.environ.get("SNIPARA_MIXED_IMAGE")
+    if not image:
+        pytest.skip("provide explicit mixed image to qualify this profile")
+    project = tmp_path / "mixed"
+    project.mkdir()
+    (project / "check.py").write_text(
+        "import subprocess\nfrom pathlib import Path\nsubprocess.run(['node','-e',\"require('node:fs').writeFileSync('mixed.txt','ok')\"],check=True)\nassert Path('mixed.txt').read_text() == 'ok'\n"
+    )
+    request = ValidationRequest(
+        workspace=str(project),
+        argv=["python", "check.py"],
+        image=image,
+        profile="mixed",
+        artifacts=["mixed.txt"],
+    )
+    result = run(request, tmp_path / "runs")
+    assert result["status"] == "passed", result
+    assert not (project / "mixed.txt").exists()

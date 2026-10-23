@@ -1,0 +1,14 @@
+# Build explicitly; dependency installation is separate from offline validation.
+# Pin both build arguments to reviewed immutable image references for release.
+ARG NODE_IMAGE=node:24-bookworm-slim
+ARG PYTHON_IMAGE=python:3.11-slim
+FROM ${NODE_IMAGE} AS node
+FROM ${PYTHON_IMAGE}
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+# pnpm can be installed at an explicit version in a project-owned derived image.
+# No repository sources, credentials, host caches or account setup in this image.
+USER 65534:65534
+WORKDIR /work

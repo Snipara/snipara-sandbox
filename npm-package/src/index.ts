@@ -428,3 +428,19 @@ export function isImportAllowed(moduleName: string): boolean {
 export function getProfile(name: ExecutionProfile) {
   return EXECUTION_PROFILES[name];
 }
+
+/** Deterministic Docker validation; standalone and independent of an LLM/account. */
+export interface RepositoryValidationRequest {
+  schema_version?: 'snipara.sandbox.validation.v1';
+  workspace: string;
+  argv: string[];
+  image: string;
+  profile?: 'python' | 'node' | 'mixed';
+  cwd?: string;
+  timeout_seconds?: number;
+  cpus?: number;
+  memory_mb?: number;
+  pids?: number;
+  disk_mb?: number;
+  artifacts?: string[];
+}

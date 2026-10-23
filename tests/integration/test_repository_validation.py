@@ -94,3 +94,44 @@ def test_real_mixed_profile(tmp_path):
     result = run(request, tmp_path / "runs")
     assert result["status"] == "passed", result
     assert not (project / "mixed.txt").exists()
+
+
+def test_real_cancel_log_budget_and_filtered_credentials(tmp_path):
+    import concurrent.futures
+    import json
+    import time
+
+    from rlm.validation.runner import cancel
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".env.local").write_text("TOKEN=should-never-appear")
+    (project / "check.py").write_text(
+        "from pathlib import Path\nassert not Path('.env.local').exists()\nprint('x'*100000)\n"
+    )
+    store = tmp_path / "runs"
+    request = ValidationRequest(
+        workspace=str(project), argv=["python", "check.py"], image="python:3.11-slim"
+    )
+    result = run(request, store)
+    assert result["status"] == "passed" and result["logs_truncated"]
+    assert (store / result["run_id"] / "output.log").stat().st_size <= 65536
+    (project / "check.py").write_text(
+        'import subprocess,time\nsubprocess.Popen(["sleep","60"])\ntime.sleep(60)'
+    )
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(run, request, store)
+        deadline = time.monotonic() + 15
+        active = None
+        while time.monotonic() < deadline:
+            for path in store.glob("*/receipt.json"):
+                receipt = json.loads(path.read_text())
+                if receipt["status"] == "running":
+                    active = receipt["run_id"]
+            if active:
+                break
+            time.sleep(0.05)
+        assert active
+        assert cancel(store, active)["cancel_requested"]
+        result = future.result(timeout=15)
+    assert result["status"] == "cancelled" and result["cleanup_complete"]

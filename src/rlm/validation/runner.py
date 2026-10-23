@@ -10,6 +10,7 @@ import re
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -46,6 +47,15 @@ def redact(value: str) -> str:
         r"(?i)((?:api[_-]?key|token|password|secret)\s*[=:]\s*)[^\s,;]+", r"\1[REDACTED]", value
     )
     return re.sub(r"(?i)(--(?:api-key|token|password|secret)\s+)[^\s]+", r"\1[REDACTED]", value)
+
+
+def redact_argv(argv: list[str]) -> list[str]:
+    display = []
+    secret_next = False
+    for value in argv:
+        display.append("[REDACTED]" if secret_next else redact(value))
+        secret_next = value.lower() in {"--token", "--api-key", "--password", "--secret"}
+    return display
 
 
 def canonical(value: Any) -> bytes:
@@ -88,13 +98,30 @@ def diagnose(request: ValidationRequest, *, client: Any = None) -> dict[str, Any
         client.ping()
         image = client.images.get(request.image)
         capture(Path(request.workspace))
-        report.update(
-            status="ready",
-            ready=True,
-            image_id=image.id,
-            docker_version=client.version()["Version"],
-            capability_scope="daemon-image-snapshot; runtime probe occurs inside isolated job",
-        )
+        with tempfile.TemporaryDirectory(prefix="snipara-diagnose-") as folder:
+            directory = Path(folder)
+            project = directory / "project"
+            project.mkdir()
+            probe = request.model_copy(
+                update={
+                    "workspace": str(project),
+                    "argv": ["true"],
+                    "cwd": ".",
+                    "artifacts": [],
+                    "timeout_seconds": min(request.timeout_seconds, 10),
+                }
+            )
+            checked = run(probe, directory / "runs", client=client)
+            report.update(
+                status="ready" if checked["status"] == "passed" else "incompatible",
+                ready=checked["status"] == "passed",
+                image_id=image.id,
+                docker_version=client.version()["Version"],
+                runtime_versions=checked.get("runtime_versions", ""),
+                probe_status=checked["status"],
+            )
+            if not report["ready"]:
+                report["next_action"] = "needs_user_choice"
     except Exception as error:
         report["reason"] = redact(str(error))[:2000]
         report["next_action"] = "needs_user_choice"
@@ -163,8 +190,21 @@ def _collect(container: Any, directory: Path, paths: list[str]) -> list[dict[str
     return artifacts
 
 
-def run(request: ValidationRequest, store: Path, *, client: Any = None) -> dict[str, Any]:
+def run(
+    request: ValidationRequest,
+    store: Path,
+    *,
+    client: Any = None,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
     """Run a snapshot once, with explicit lifecycle ownership and durable evidence."""
+    project = Path(request.workspace).resolve()
+    resolved_store = store.resolve()
+    if resolved_store == project or (
+        resolved_store.is_relative_to(project)
+        and resolved_store.relative_to(project).parts[0] != ".snipara"
+    ):
+        raise ValueError("store inside workspace must be under excluded .snipara directory")
     store.mkdir(parents=True, exist_ok=True, mode=0o700)
     if store.is_symlink():
         raise ValueError("symlink store refused")
@@ -179,7 +219,7 @@ def run(request: ValidationRequest, store: Path, *, client: Any = None) -> dict[
         "status": "preparing",
         "request_sha256": request_hash(request),
         "command_sha256": hashlib.sha256(canonical(request.argv)).hexdigest(),
-        "argv": [redact(v) for v in request.argv],
+        "argv": redact_argv(request.argv),
         "cwd": request.cwd,
         "artifacts": [],
         "cleanup_complete": False,
@@ -248,7 +288,9 @@ def run(request: ValidationRequest, store: Path, *, client: Any = None) -> dict[
                 state = client.api.exec_inspect(execution)
                 if not state["Running"]:
                     break
-                if (directory / "cancel-requested").exists():
+                if (directory / "cancel-requested").exists() or (
+                    cancel_event is not None and cancel_event.is_set()
+                ):
                     receipt["status"] = "cancelled"
                     container.kill()
                     break
@@ -281,7 +323,12 @@ def run(request: ValidationRequest, store: Path, *, client: Any = None) -> dict[
             if request.artifacts and receipt["status"] == "passed":
                 receipt["artifacts"] = _collect(container, directory, request.artifacts)
     except Exception as error:
-        receipt.update(status="error", error=redact(str(error))[:2000])
+        receipt.update(
+            status="cancelled" if (directory / "cancel-requested").exists() else "error",
+            error=redact(str(error))[:2000],
+        )
+    except KeyboardInterrupt:
+        receipt["status"] = "cancelled"
     finally:
         if container is not None:
             try:
@@ -331,6 +378,13 @@ def verify(
             or hashlib.sha256(path.read_bytes()).hexdigest() != artifact["sha256"]
         ):
             reasons.append("artifact_changed")
+    log = store / run_id / "output.log"
+    if (
+        log.is_symlink()
+        or not log.is_file()
+        or hashlib.sha256(log.read_bytes()).hexdigest() != receipt.get("log_sha256")
+    ):
+        reasons.append("log_changed")
     if receipt.get("status") != "passed" or not receipt.get("cleanup_complete"):
         reasons.append("run_not_accepted")
     return {

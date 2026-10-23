@@ -22,6 +22,7 @@ for _submodule in (
     "logging",
     "repl",
     "tools",
+    "validation",
 ):
     sys.modules[f"{__name__}.{_submodule}"] = importlib.import_module(f"rlm.{_submodule}")
 

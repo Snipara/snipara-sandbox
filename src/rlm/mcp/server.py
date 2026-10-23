@@ -43,6 +43,9 @@ from rlm.repl.base import BaseREPL
 from rlm.repl.docker import DockerREPL, build_workspace_image
 from rlm.repl.local import LocalREPL
 from rlm.repl.localdev import LocalDevREPL
+from rlm.validation.mcp import NAMES as VALIDATION_NAMES
+from rlm.validation.mcp import handle as handle_validation
+from rlm.validation.mcp import validation_tools
 
 # Default session TTL: 30 minutes
 DEFAULT_SESSION_TTL = 30 * 60
@@ -376,6 +379,7 @@ def create_server() -> Server:
     async def list_tools() -> list[Tool]:
         """List available Snipara Sandbox tools."""
         return [
+            *validation_tools(),
             Tool(
                 name="execute_python",
                 description=(
@@ -635,6 +639,11 @@ def create_server() -> Server:
     async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
         """Handle tool calls."""
         session_id = arguments.get("session_id")
+
+        if name in VALIDATION_NAMES:
+            return await handle_validation(
+                name, arguments, config.docker_workspace_path or Path.cwd()
+            )
 
         if name == "execute_python":
             try:

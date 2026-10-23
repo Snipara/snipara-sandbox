@@ -18,6 +18,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from rlm import __version__
+from rlm.validation.cli import app as validation_app
 
 if TYPE_CHECKING:
     from rlm.core.config import RLMConfig
@@ -248,6 +249,8 @@ def _config_show_rows(payload: dict[str, object]) -> list[tuple[str, str, str]]:
 
 
 app.add_typer(config_app, name="config")
+
+app.add_typer(validation_app, name="validation")
 
 
 def is_claude_code_context() -> bool:

@@ -20,7 +20,9 @@ CHOICES = ["alternative", "install", "local", "skip"]
 def scope_identity(request: ValidationRequest, scope: str) -> str:
     if not scope or len(scope) > 256:
         raise ValueError("explicit bounded workflow scope required")
-    context = request.model_dump(exclude={"argv", "artifacts"})
+    context = request.identity_payload()
+    context.pop("argv")
+    context.pop("artifacts")
     context["workspace"] = str(Path(request.workspace).resolve(strict=True))
     return hashlib.sha256(canonical({"scope": scope, "context": context})).hexdigest()
 

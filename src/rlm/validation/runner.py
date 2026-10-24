@@ -20,7 +20,7 @@ from rlm.validation.artifact_readers import NODE_READER, PYTHON_READER
 from rlm.validation.limits import disk_allocation, require_capabilities
 from rlm.validation.models import SCHEMA, ValidationRequest
 from rlm.validation.paths import canonical_system_path, secure_path
-from rlm.validation.profiles import probe_script
+from rlm.validation.profiles import probe_script, runtime_commands
 from rlm.validation.snapshot import (
     SnapshotCancelledError,
     capture_bounded,
@@ -99,7 +99,7 @@ def canonical(value: Any) -> bytes:
 
 
 def request_hash(request: ValidationRequest) -> str:
-    return hashlib.sha256(canonical(request.model_dump())).hexdigest()
+    return hashlib.sha256(canonical(request.identity_payload())).hexdigest()
 
 
 def _write(directory: StateDirectory, receipt: dict[str, Any]) -> None:
@@ -165,6 +165,15 @@ def diagnose(
                     "cwd": ".",
                     "artifacts": [],
                     "timeout_seconds": min(request.timeout_seconds, 10),
+                    "requirements": request.requirements.model_copy(
+                        update={
+                            "commands": list(
+                                dict.fromkeys(
+                                    [*request.requirements.commands, *runtime_commands(request)]
+                                )
+                            )
+                        }
+                    ),
                 }
             )
             checked = run(probe, directory / "runs", client=client, cancel_event=cancel_event)
@@ -574,9 +583,7 @@ def run(
                 cancelled,
             )
             receipt["probe_exit_code"] = probe_code
-            if probe_code != 0:
-                receipt["status"] = "environment_incompatible"
-            else:
+            try:
                 versions = _read_file(
                     container,
                     "/tmp",
@@ -588,7 +595,16 @@ def run(
                     deadline=deadline,
                     cancelled=cancelled,
                 )
-                receipt["runtime_versions"] = versions[:4096].decode("utf-8", errors="replace")
+                receipt["runtime_versions"] = redact(
+                    versions[:4096].decode("utf-8", errors="replace")
+                )
+            except ValueError:
+                if probe_code == 0:
+                    raise
+                receipt["runtime_versions"] = "Runtime probe failed; diagnostic reader unavailable."
+            if probe_code != 0:
+                receipt["status"] = "environment_incompatible"
+            else:
                 code = _execute(
                     container,
                     client,

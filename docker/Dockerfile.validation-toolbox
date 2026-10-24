@@ -1,0 +1,25 @@
+# Explicit preparation only. Override both arguments with reviewed image digests
+# for distribution; execute jobs using the resulting immutable local image ID.
+ARG NODE_IMAGE=node:24-bookworm-slim
+ARG PYTHON_IMAGE=python:3.11-slim
+FROM ${NODE_IMAGE} AS node
+FROM ${PYTHON_IMAGE}
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates git curl jq ripgrep make gcc g++ sqlite3 graphviz \
+    poppler-utils tesseract-ocr ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
+COPY docker/requirements.validation-toolbox.txt /opt/requirements.validation-toolbox.txt
+RUN python -m pip install --no-cache-dir -r /opt/requirements.validation-toolbox.txt \
+ && python -m pip freeze > /opt/validation-python.freeze.txt \
+ && npm install --global pnpm@10.8.1 typescript@5.9.3 tsx@4.22.4 \
+ && npm list --global --depth=0 --json > /opt/validation-node.freeze.json \
+ && dpkg-query -W > /opt/validation-system.freeze.txt
+ENV NODE_PATH=/usr/local/lib/node_modules \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    PYTHONDONTWRITEBYTECODE=1
+USER 65534:65534
+WORKDIR /work

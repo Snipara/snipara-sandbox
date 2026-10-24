@@ -2,12 +2,39 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 SCHEMA = "snipara.sandbox.validation.v1"
+
+
+class ValidationRequirements(BaseModel):
+    """Capabilities already installed in an image; never installation requests."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    python_modules: list[str] = Field(default_factory=list, max_length=32)
+    node_modules: list[str] = Field(default_factory=list, max_length=32)
+    commands: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("python_modules", "node_modules", "commands")
+    @classmethod
+    def bounded_names(cls, values: list[str], info: ValidationInfo) -> list[str]:
+        patterns = {
+            "python_modules": r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*",
+            "node_modules": r"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*",
+            "commands": r"[A-Za-z0-9][A-Za-z0-9._+-]*",
+        }
+        if any(
+            len(value) > 128 or not re.fullmatch(patterns[info.field_name], value)
+            for value in values
+        ):
+            raise ValueError(
+                "expected a bounded module or command name, without paths or arguments"
+            )
+        return list(dict.fromkeys(values))
 
 
 class ValidationRequest(BaseModel):
@@ -26,6 +53,14 @@ class ValidationRequest(BaseModel):
     pids: int = Field(default=128, ge=16, le=512)
     disk_mb: int = Field(default=2048, ge=16, le=4096)
     artifacts: list[str] = Field(default_factory=list, max_length=32)
+    requirements: ValidationRequirements = Field(default_factory=ValidationRequirements)
+
+    def identity_payload(self) -> dict[str, object]:
+        """Keep pre-capability v1 request/choice hashes valid for empty requirements."""
+        payload = self.model_dump()
+        if not any(payload["requirements"].values()):
+            payload.pop("requirements")
+        return payload
 
     @field_validator("workspace")
     @classmethod

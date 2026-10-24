@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Prepared toolbox and dependency readiness
+
+- Add a prepared development image for Python web/API, Node/TypeScript, data,
+  document/OCR/media and native build tooling, with dependency inventories.
+- Add bounded optional Python module, Node package and executable requirements
+  to repository validation and the SDK/MCP schema. Missing or broken imports
+  fail readiness before the command, without installation or host fallback.
+- Preserve historical v1 request/choice identity for empty requirements, bind
+  nonempty requirements to proofs, and retain failed-probe diagnostics.
+- Preserve inferred pnpm requirements during readiness checks.
+
 ### 2.3.0 candidate
 
 - Add account-free, LLM-free repository validation through CLI and six MCP tools, with Python/Node/mixed prepared-image profiles.

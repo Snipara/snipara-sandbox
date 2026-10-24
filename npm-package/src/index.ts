@@ -443,4 +443,10 @@ export interface RepositoryValidationRequest {
   pids?: number;
   disk_mb?: number;
   artifacts?: string[];
+  /** Already-installed image capabilities; checked offline before the command. */
+  requirements?: {
+    python_modules?: string[];
+    node_modules?: string[];
+    commands?: string[];
+  };
 }

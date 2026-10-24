@@ -102,3 +102,11 @@ console.log(MCP_TOOLS.EXECUTE_PYTHON); // 'execute_python'
 ## License
 
 MIT
+
+## Dependency readiness (next release)
+
+Repository validation requests accept optional `requirements` with
+`python_modules`, `node_modules` and `commands` arrays. These assert capabilities
+already installed in the selected image; they never install dependencies.
+Use a runtime supporting these fields. Existing requests remain valid without
+them. See the repository's `docs/validation-toolbox.md` for prepared tooling.

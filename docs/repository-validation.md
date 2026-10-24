@@ -28,6 +28,11 @@ prepare an image explicitly from reviewed lockfiles before testing. A missing
 dependency is not silently installed. `docker/Dockerfile.validation` is a base
 recipe for mixed projects, not a claim to contain every project's dependencies.
 
+For a broader prepared image and project-specific capability probes, see
+[the development toolbox](validation-toolbox.md). Optional `requirements`
+check Python imports, Node package resolution and executable availability before
+dispatch; missing dependencies fail readiness without installation or host fallback.
+
 ```sh
 snipara-sandbox validation gate --request request.json --scope workflow-lot-id
 snipara-sandbox validation run --request request.json --store /absolute/proof-store

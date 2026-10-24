@@ -107,3 +107,53 @@ class TestLocalREPLSafety:
         """Test that large output is truncated."""
         result = await repl.execute("print('x' * 200000)")
         assert result.truncated or len(result.output) < 200000
+
+
+class TestAugmentedAssignment:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "initial, operation, operand, expected",
+        [
+            (1, "+=", 1, 2),
+            (5, "-=", 2, 3),
+            (3, "*=", 4, 12),
+            (7, "/=", 2, 3.5),
+            (7, "//=", 2, 3),
+            (7, "%=", 3, 1),
+            (2, "**=", 3, 8),
+            (3, "<<=", 2, 12),
+            (12, ">>=", 2, 3),
+            (6, "&=", 3, 2),
+            (6, "^=", 3, 5),
+            (6, "|=", 3, 7),
+        ],
+    )
+    async def test_numeric_operators(self, repl, initial, operation, operand, expected):
+        outcome = await repl.execute(
+            f"x = {initial!r}\nx {operation} {operand!r}\nassert x == {expected!r}"
+        )
+        assert outcome.success, outcome.error
+
+    @pytest.mark.asyncio
+    async def test_control_and_mutable_alias(self, repl):
+        outcome = await repl.execute(
+            "x = 1\nx = x + 1\nassert x == 2\n"
+            "x = [1]\nalias = x\nx += [2]\nassert alias is x\nassert alias == [1, 2]\n"
+            "word = 'a'\nword += 'b'\nassert word == 'ab'"
+        )
+        assert outcome.success, outcome.error
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "code, error",
+        [
+            ("x = 1\nx /= 0", "ZeroDivisionError"),
+            ("x = 1\nx += 'a'", "TypeError"),
+            ("x = 1\nx @= 2", "TypeError"),
+        ],
+    )
+    async def test_native_errors_preserved(self, repl, code, error):
+        outcome = await repl.execute(code)
+        assert not outcome.success
+        assert error in outcome.error
+        assert "_inplacevar_" not in outcome.error

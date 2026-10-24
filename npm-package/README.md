@@ -103,7 +103,7 @@ console.log(MCP_TOOLS.EXECUTE_PYTHON); // 'execute_python'
 
 MIT
 
-## Dependency readiness (next release)
+## Dependency readiness (Sandbox 2.4)
 
 Repository validation requests accept optional `requirements` with
 `python_modules`, `node_modules` and `commands` arrays. These assert capabilities

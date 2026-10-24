@@ -5,6 +5,7 @@ from __future__ import annotations
 import builtins
 import hashlib
 import json
+import operator
 import platform
 import time
 import traceback
@@ -40,6 +41,37 @@ def _safe_import(name: str, *args: Any, **kwargs: Any) -> Any:
     if not is_import_allowed(name):
         raise ImportError(f"Import of '{name}' is not allowed in sandbox")
     return builtins.__import__(name, *args, **kwargs)
+
+
+_INPLACE_OPERATORS = {
+    "+=": operator.iadd,
+    "-=": operator.isub,
+    "*=": operator.imul,
+    "/=": operator.itruediv,
+    "//=": operator.ifloordiv,
+    "%=": operator.imod,
+    "**=": operator.ipow,
+    "<<=": operator.ilshift,
+    ">>=": operator.irshift,
+    "&=": operator.iand,
+    "^=": operator.ixor,
+    "|=": operator.ior,
+    "@=": operator.imatmul,
+}
+
+
+def _guarded_inplace(operation: str, left: Any, right: Any) -> Any:
+    """Implement RestrictedPython's augmented variable assignment hook.
+
+    Use Python's in-place operators so mutable aliases retain normal semantics.
+    Attribute and item assignments remain subject to RestrictedPython's compiler
+    restrictions; this hook only handles the variable assignment it emits.
+    """
+    try:
+        implementation = _INPLACE_OPERATORS[operation]
+    except KeyError:
+        raise ValueError(f"Unsupported augmented operator: {operation}") from None
+    return implementation(left, right)
 
 
 class LocalREPL(BaseREPL):
@@ -119,6 +151,7 @@ class LocalREPL(BaseREPL):
                 "True": True,
                 "False": False,
             },
+            "_inplacevar_": _guarded_inplace,
             "_getattr_": safer_getattr,
             "_getitem_": default_guarded_getitem,
             "_getiter_": default_guarded_getiter,

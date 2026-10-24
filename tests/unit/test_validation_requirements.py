@@ -1,7 +1,9 @@
 """Dependency readiness is explicit, confined and bound to the request proof."""
 
 import hashlib
+import json
 import subprocess
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -53,12 +55,53 @@ def test_empty_requirements_preserve_legacy_v1_receipt_and_choice_identity(tmp_p
     req = request(tmp_path)
     legacy = req.model_dump(exclude={"requirements"})
     assert request_hash(req) == hashlib.sha256(canonical(legacy)).hexdigest()
-    legacy.pop("argv")
-    legacy.pop("artifacts")
-    assert (
-        scope_identity(req, "lot")
-        == hashlib.sha256(canonical({"scope": "lot", "context": legacy})).hexdigest()
+    parts = [
+        "snipara.validation.scope.v2",
+        "lot",
+        req.schema_version,
+        str(tmp_path.resolve()),
+        req.profile,
+        req.image,
+        req.cwd,
+        str(req.timeout_seconds),
+        str(int(req.cpus * 1_000_000_000)),
+        str(req.memory_mb),
+        str(req.pids),
+        str(req.disk_mb),
+    ]
+    assert scope_identity(req, "lot") == hashlib.sha256(canonical(parts)).hexdigest()
+
+
+def test_nonempty_requirements_use_independently_reproducible_scope_v3(tmp_path):
+    req = request(tmp_path, requirements={"python_modules": ["fastapi"]})
+    parts = [
+        "snipara.validation.scope.v3",
+        "lot",
+        req.schema_version,
+        str(tmp_path.resolve()),
+        req.profile,
+        req.image,
+        req.cwd,
+        str(req.timeout_seconds),
+        str(int(req.cpus * 1_000_000_000)),
+        str(req.memory_mb),
+        str(req.pids),
+        str(req.disk_mb),
+        json.dumps(["fastapi"], separators=(",", ":")),
+        "[]",
+        "[]",
+    ]
+    assert scope_identity(req, "lot") == hashlib.sha256(canonical(parts)).hexdigest()
+
+
+def test_published_scope_v3_vector_matches_independent_consumer():
+    contract = json.loads(
+        (Path(__file__).resolve().parents[2] / "contracts/validation-scope-v3.json").read_text()
     )
+    for case in contract["cases"]:
+        req = ValidationRequest.model_validate(case["request"])
+        expected = hashlib.sha256(case["preimage"].encode("utf-8")).hexdigest()
+        assert scope_identity(req, case["scope"]) == expected == case["sha256"]
 
 
 def test_capability_changes_invalidate_request_and_saved_choice(tmp_path):

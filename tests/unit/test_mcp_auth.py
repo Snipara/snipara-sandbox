@@ -2,7 +2,7 @@
 
 import json
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from rlm.mcp.auth import (
@@ -12,6 +12,8 @@ from rlm.mcp.auth import (
     get_snipara_token,
     load_snipara_tokens,
 )
+
+UTC = timezone.utc
 
 
 class TestLoadSniparaTokens:

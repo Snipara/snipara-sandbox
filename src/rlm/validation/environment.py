@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any
 
+from rlm.validation.identity import scope_identity
 from rlm.validation.models import ValidationRequest
 from rlm.validation.paths import secure_path
 from rlm.validation.runner import canonical, diagnose
@@ -15,16 +16,6 @@ from rlm.validation.state import StateDirectory
 
 PROMPT = "Snipara Sandbox n'est pas disponible pour ces tests. Souhaitez-vous utiliser un autre environnement, installer/configurer Sandbox, ou continuer sans Sandbox ?"
 CHOICES = ["alternative", "install", "local", "skip"]
-
-
-def scope_identity(request: ValidationRequest, scope: str) -> str:
-    if not scope or len(scope) > 256:
-        raise ValueError("explicit bounded workflow scope required")
-    context = request.identity_payload()
-    context.pop("argv")
-    context.pop("artifacts")
-    context["workspace"] = str(Path(request.workspace).resolve(strict=True))
-    return hashlib.sha256(canonical({"scope": scope, "context": context})).hexdigest()
 
 
 def choice_path(request: ValidationRequest, scope: str) -> Path:
@@ -43,20 +34,23 @@ def record_choice(
     acknowledged: bool,
     environment: str = "",
 ) -> dict[str, Any]:
-    if not acknowledged:
+    if acknowledged is not True:
         raise ValueError("explicit user choice acknowledgement required")
     if choice not in CHOICES:
         raise ValueError("unsupported choice")
+    if not isinstance(environment, str) or len(environment) > 256:
+        raise ValueError("environment must be a bounded string")
     if choice == "alternative" and not environment.strip():
         raise ValueError("name the alternative environment")
+    now = time.time()
     value = {
         "schema_version": "snipara.validation.choice.v1",
         "scope_sha256": scope_identity(request, scope),
         "choice": choice,
-        "environment": environment[:256],
+        "environment": environment,
         "authority": "operator_asserted",
-        "created_at": time.time(),
-        "expires_at": time.time() + 86400,
+        "created_at": now,
+        "expires_at": now + 86400,
     }
     path = secure_path(choice_path(request, scope))
     with StateDirectory.open(path.parent, create=True) as directory:
@@ -64,23 +58,46 @@ def record_choice(
     return value
 
 
+def valid_choice(value: Any, identity: str) -> bool:
+    now = time.time()
+    return (
+        isinstance(value, dict)
+        and value.get("schema_version") == "snipara.validation.choice.v1"
+        and value.get("scope_sha256") == identity
+        and value.get("authority") == "operator_asserted"
+        and isinstance(value.get("choice"), str)
+        and value["choice"] in CHOICES
+        and isinstance(value.get("environment"), str)
+        and len(value["environment"]) <= 256
+        and (value["choice"] != "alternative" or bool(value["environment"].strip()))
+        and type(value.get("created_at")) in (int, float)
+        and math.isfinite(value["created_at"])
+        and type(value.get("expires_at")) in (int, float)
+        and math.isfinite(value["expires_at"])
+        and value["expires_at"] > now
+        and value["created_at"] <= now + 60
+        and 0 < value["expires_at"] - value["created_at"] <= 86401
+    )
+
+
 def gate(
     request: ValidationRequest, scope: str, *, readiness: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     identity = scope_identity(request, scope)
-    path = secure_path(choice_path(request, scope))
     choice = None
+    invalid_choice = False
     try:
+        path = secure_path(choice_path(request, scope))
         with StateDirectory.open(path.parent) as directory:
             value = json.loads(directory.read(path.name, 65536))
-        if (
-            value.get("scope_sha256") == identity
-            and value.get("expires_at", 0) > time.time()
-            and value.get("choice") in CHOICES
-        ):
+        if valid_choice(value, identity):
             choice = value
+        else:
+            invalid_choice = True
     except FileNotFoundError:
         pass
+    except (OSError, ValueError, TypeError, OverflowError):
+        invalid_choice = True
     # A saved choice remains visible even if readiness changes; do not switch environments silently.
     if choice and choice["choice"] in {"local", "alternative", "skip"}:
         return {
@@ -91,7 +108,11 @@ def gate(
             "proof_requirement_waived": False,
             "execution_authorized_by_gate": False,
         }
-    readiness = diagnose(request) if readiness is None else readiness
+    readiness = (
+        {"ready": False, "reason": "saved_choice_invalid_or_expired"}
+        if invalid_choice
+        else (diagnose(request) if readiness is None else readiness)
+    )
     if readiness.get("ready") is True:
         return {
             "status": "sandbox_ready",

@@ -133,7 +133,7 @@ pip install snipara-sandbox[snipara]
 pip install snipara-sandbox[all]
 ```
 
-Package version in this repo: `2.3.0` (unpublished candidate).
+Package version in this repo: `2.4.0`.
 
 For deterministic repository tests without an LLM API key or Snipara account,
 use the [repository validation workflow](docs/repository-validation.md).

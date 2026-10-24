@@ -56,3 +56,73 @@ def test_expired_choice_and_other_project_do_not_inherit(tmp_path):
         ]
         == "needs_user_choice"
     )
+
+
+def test_portable_scope_matches_published_cross_language_vectors():
+    import json
+    from pathlib import Path
+
+    from rlm.validation.identity import scope_identity
+    from rlm.validation.models import ValidationRequest
+
+    fixture = json.loads(
+        (Path(__file__).resolve().parents[2] / "contracts/validation-scope-v2.json").read_text()
+    )
+    for case in fixture["cases"]:
+        assert (
+            scope_identity(ValidationRequest.model_validate(case["request"]), case["scope"])
+            == case["sha256"]
+        )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"schema_version": None},
+        {"authority": None},
+        {"created_at": None},
+        {"environment": None},
+        {"environment": ""},
+        {"expires_at": float("inf")},
+        {"expires_at": "future"},
+        {"created_at": True},
+        {"expires_at": True},
+    ],
+)
+def test_standalone_gate_refuses_malformed_saved_choice_even_if_docker_ready(tmp_path, change):
+    from unittest.mock import patch
+
+    req = request(tmp_path)
+    value = record_choice(req, "lot", "alternative", acknowledged=True, environment="reviewed-ci")
+    value.update(change)
+    path = choice_path(req, "lot")
+    path.write_text(json.dumps(value))
+    before = path.read_bytes()
+    with patch("rlm.validation.environment.diagnose") as diagnose:
+        result = gate(req, "lot", readiness={"ready": True})
+    assert result["status"] == "needs_user_choice"
+    assert result["execution_authorized_by_gate"] is False
+    assert path.read_bytes() == before
+    diagnose.assert_not_called()
+
+
+def test_incomplete_nonobject_and_excessive_lifetime_choices_cannot_be_reused(tmp_path):
+    import time
+
+    req = request(tmp_path)
+    good = record_choice(req, "lot", "alternative", acknowledged=True, environment="reviewed-ci")
+    path = choice_path(req, "lot")
+    for value in [
+        [],
+        {
+            "scope_sha256": good["scope_sha256"],
+            "choice": "alternative",
+            "expires_at": time.time() + 60,
+        },
+        {**good, "expires_at": time.time() + 86400 * 365},
+        {**good, "created_at": time.time() + 3600, "expires_at": time.time() + 7200},
+    ]:
+        path.write_text(json.dumps(value))
+        assert gate(req, "lot", readiness={"ready": True})["status"] == "needs_user_choice"
+    path.write_text(json.dumps(good))
+    assert gate(req, "lot", readiness={"ready": True})["status"] == "user_choice_recorded"

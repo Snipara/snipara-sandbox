@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 2.4.0 - 2026-10-24
 
 ### Prepared toolbox and dependency readiness
 
@@ -15,7 +15,7 @@ All notable changes to this project are documented in this file.
   nonempty requirements to proofs, and retain failed-probe diagnostics.
 - Preserve inferred pnpm requirements during readiness checks.
 
-### 2.3.0 candidate
+## 2.3.0 - 2026-10-23
 
 - Add account-free, LLM-free repository validation through CLI and six MCP tools, with Python/Node/mixed prepared-image profiles.
 - Capture filtered descriptor-owned snapshots, run non-root offline Docker jobs with aggregate resource limits, and export bounded logs/artifacts tied to exact source, request and image identities.

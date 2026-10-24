@@ -21,7 +21,7 @@ updates and transitive dependencies can change future builds: the image ID and
 recorded inventories, rather than the recipe alone, bind a tested environment.
 No source, account or provider credentials are included.
 
-The next Sandbox release adds optional requirements to validation requests:
+Sandbox 2.4 adds optional requirements to validation requests:
 
 ```json
 {
@@ -45,8 +45,11 @@ are accepted. Imports can execute package initialization, always within the same
 bounded network-off Docker isolation. Node resolution does not claim package
 execution or browser availability. Broken imports fail readiness too.
 
-Empty requirements preserve existing v1 receipt and operator-choice hashes;
-nonempty requirements are bound into both identities. The MCP schema and
+Empty requirements preserve existing v1 receipt hashes and published portable
+scope-v2 choice hashes. Nonempty requirements use scope v3 and are bound into
+both identities. Independent choice consumers must support scope v3 before
+accepting choices for requests with requirements; v2-only consumers must refuse
+these requests rather than reuse a choice. The MCP schema and
 TypeScript SDK expose the same optional fields. Older 2.3 clients/runtimes may
 reject these fields: upgrade/reload before using them. Omitted requirements
 still check only the original runtime profile, not project dependencies.

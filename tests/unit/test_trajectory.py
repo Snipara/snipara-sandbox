@@ -2,7 +2,7 @@
 
 import json
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +10,8 @@ import pytest
 
 from rlm.core.types import ToolCall, ToolResult, TrajectoryEvent
 from rlm.logging.trajectory import TrajectoryLogger
+
+UTC = timezone.utc
 
 
 @pytest.fixture

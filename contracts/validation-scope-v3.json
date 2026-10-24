@@ -1,0 +1,30 @@
+{
+  "contract": "snipara.validation.scope.v3",
+  "encoding": "UTF-8 JSON array of strings. scope-v2 fields followed by three compact JSON array strings: python_modules, node_modules, commands. Empty requirements continue to use scope v2.",
+  "cases": [
+    {
+      "request": {
+        "workspace": "/",
+        "argv": [
+          "python",
+          "test.py"
+        ],
+        "image": "prepared:local",
+        "requirements": {
+          "python_modules": [
+            "fastapi"
+          ],
+          "node_modules": [
+            "@scope/package"
+          ],
+          "commands": [
+            "pdftotext"
+          ]
+        }
+      },
+      "scope": "lot",
+      "preimage": "[\"snipara.validation.scope.v3\",\"lot\",\"snipara.sandbox.validation.v1\",\"/\",\"python\",\"prepared:local\",\".\",\"120\",\"2000000000\",\"2048\",\"128\",\"2048\",\"[\\\"fastapi\\\"]\",\"[\\\"@scope/package\\\"]\",\"[\\\"pdftotext\\\"]\"]",
+      "sha256": "f3b3f71835ef261c1d91c1ccd0655cc1d74b9d93a6b21837634c92379db05535"
+    }
+  ]
+}

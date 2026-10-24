@@ -31,9 +31,14 @@ def validation_tools() -> list[Tool]:
     result = []
     for name in sorted(NAMES):
         properties: dict[str, Any] = {}
+        definitions: dict[str, Any] = {}
         required = []
         if name in {"validation_diagnose", "validation_run", "validation_verify"}:
-            properties["request"] = ValidationRequest.model_json_schema()
+            request_schema = ValidationRequest.model_json_schema()
+            # Local JSON pointers resolve from the complete tool document,
+            # even when the request model is nested under properties.request.
+            definitions = request_schema.pop("$defs", {})
+            properties["request"] = request_schema
             required.append("request")
         if name in {
             "validation_status",
@@ -49,6 +54,7 @@ def validation_tools() -> list[Tool]:
                 description="Deterministic repository validation in owned Docker jobs; confined to configured workspace; no installation, inference or local fallback. "
                 + name,
                 inputSchema={
+                    **({"$defs": definitions} if definitions else {}),
                     "type": "object",
                     "properties": properties,
                     "required": required,

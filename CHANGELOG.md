@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## 2.4.1 - 2026-10-24
+
+- Hoist nested request-model JSON Schema definitions to the complete MCP tool
+  document root so capability references resolve during real tools/call validation.
+- Validate all three request-bearing MCP wrappers with the JSON Schema validator,
+  including legacy requests, capability requests and malformed requirements.
+
 ## 2.4.0 - 2026-10-24
 
 ### Prepared toolbox and dependency readiness

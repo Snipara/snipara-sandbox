@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 import pytest
+from jsonschema import Draft202012Validator, ValidationError
 
 from rlm.validation.mcp import handle, validation_tools
 
@@ -12,6 +13,27 @@ def test_public_validation_tools_expose_contract_without_account():
         tools["validation_run"].inputSchema["properties"]["request"]["additionalProperties"]
         is False
     )
+
+
+@pytest.mark.parametrize("name", ["validation_diagnose", "validation_run", "validation_verify"])
+def test_complete_mcp_schema_resolves_nested_model_definitions(name, tmp_path):
+    tool = next(tool for tool in validation_tools() if tool.name == name)
+    schema = tool.inputSchema
+    Draft202012Validator.check_schema(schema)
+    validator = Draft202012Validator(schema)
+    request = {"workspace": str(tmp_path), "image": "prepared", "argv": ["python", "-V"]}
+    args = {"request": request}
+    if name == "validation_verify":
+        args["run_id"] = "a" * 32
+    validator.validate(args)
+    request["requirements"] = {"python_modules": ["fastapi"], "commands": ["git"]}
+    validator.validate(args)
+    request["requirements"]["commands"] = [123]
+    with pytest.raises(ValidationError):
+        validator.validate(args)
+    request["requirements"] = {"install": ["fastapi"]}
+    with pytest.raises(ValidationError):
+        validator.validate(args)
 
 
 @pytest.mark.asyncio

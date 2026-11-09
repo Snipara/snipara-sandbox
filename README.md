@@ -1,6 +1,21 @@
 # Snipara Sandbox
 
-Sandbox 2.5 adds lightweight readiness, phase timings and prepared CI profiles:
+**Run bounded checks with inspectable evidence, or execute stateful Python tools.**
+
+The Python source package is **3.0.0**. Deterministic repository validation needs
+no Snipara account or model API key. Provider-backed inference is optional and
+requires the `[inference]` extra. The TypeScript SDK has its own version.
+
+## Start with repository validation
+
+Requires Python 3.10+, a running local Docker daemon on macOS or Linux, and an
+already prepared dependency image. Install the validation runtime:
+
+```sh
+pip install 'snipara-sandbox[validation]'
+```
+
+Prepare and inspect a request before running it:
 
 ```sh
 snipara-sandbox validation profiles
@@ -8,12 +23,20 @@ snipara-sandbox validation prepare --profile python-ci --workspace /absolute/pro
   --image sha256:REVIEWED_LOCAL_IMAGE_ID --output request.json
 snipara-sandbox validation inspect --request request.json
 snipara-sandbox validation gate --request request.json --scope feature-tests
+# After reviewing the request and a successful gate:
+snipara-sandbox validation run --request request.json
 ```
 
 Replace the image placeholder with the digest of an already prepared image.
 Preparation and inspection do not execute or install anything. Gate checks current
 structural readiness; actual run qualifies the declared tools inside its container.
-Use `validation diagnose` for a deeper explicit environment probe.
+Use `validation diagnose` for a deeper explicit environment probe. Keep the run
+receipt and verify its exact source, image and artifacts before reuse or
+integration. Read [repository validation](docs/repository-validation.md) for
+request fields, offline preparation, evidence and explicit environment choices.
+
+Direct CLI execution is standalone. For coordinated lots and verified receipt
+reuse, use Companion or Orchestrator's scoped validation entry point.
 
 MCP `validation_run` accepts an explicit `scope` and optional `no_reuse` to use
 installed Orchestrator 1.15 or newer for shared local coordination. Companion 4.1
@@ -152,10 +175,10 @@ pip install 'snipara-sandbox[validation,mcp]'
 pip install 'snipara-sandbox[inference]'
 
 # With Snipara integration
-pip install snipara-sandbox[snipara]
+pip install 'snipara-sandbox[snipara]'
 
 # Full install
-pip install snipara-sandbox[all]
+pip install 'snipara-sandbox[all]'
 ```
 
 Python package version in this repo: `3.0.0`. The TypeScript SDK remains `2.5.0`;
@@ -230,7 +253,7 @@ Snipara Sandbox includes an MCP server that gives AI coding agents a sandboxed P
 runtime without requiring separate LLM API keys for the runtime itself.
 
 ```bash
-pip install snipara-sandbox[mcp]
+pip install 'snipara-sandbox[mcp]'
 snipara-sandbox mcp-serve
 ```
 

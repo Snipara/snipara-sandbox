@@ -213,6 +213,9 @@ def test_ambiguous_docker_create_reconciles_owned_name(tmp_path):
     client.images.get.return_value.id = "sha256:one"
 
     def lost_response(*args, **kwargs):
+        assert kwargs["init"] is True
+        assert kwargs["network_disabled"] is True
+        assert kwargs["cap_drop"] == ["ALL"]
         client.containers.get.return_value.labels = kwargs["labels"]
         raise OSError("synthetic lost Docker create response")
 

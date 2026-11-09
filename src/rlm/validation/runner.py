@@ -124,36 +124,192 @@ def read_run(store: Path, run_id: str) -> dict[str, Any]:
         return _read_receipt(directory, run_id)
 
 
-def diagnose(
+class _Phases:
+    """Bounded fixed-name elapsed metrics, never command output or source paths."""
+
+    def __init__(self, report: dict[str, Any]) -> None:
+        self.report = report
+        self.previous = time.monotonic()
+        self.started = self.previous - report.get("duration_ms", 0) / 1000
+        self.stage = ""
+        report.setdefault("timings_ms", {})
+
+    def enter(self, stage: str) -> None:
+        now = time.monotonic()
+        if self.stage:
+            self.report["timings_ms"][self.stage] = max(0, int((now - self.previous) * 1000))
+        self.stage = stage
+        self.previous = now
+        self.report["stage"] = stage
+
+    def finish(self) -> None:
+        self.enter("complete")
+        self.report["duration_ms"] = max(0, int((time.monotonic() - self.started) * 1000))
+
+
+def readiness(
     request: ValidationRequest,
     *,
     client: Any = None,
     workspace_fd: int | None = None,
     cancel_event: threading.Event | None = None,
+    probe_timeout_seconds: int = 30,
 ) -> dict[str, Any]:
-    """Check daemon, image and project, never install or run local commands."""
+    """Current structural readiness only; no source capture or probe container."""
+    if type(probe_timeout_seconds) is not int or not 1 <= probe_timeout_seconds <= 60:
+        raise ValueError("probe_timeout_seconds must be an integer from 1 to 60")
     if client is None and not _ISOLATED_CONTROL:
-        return _control_call(
-            "diagnose", request=request, workspace_fd=workspace_fd, cancel_event=cancel_event
-        )
+        control_started = time.monotonic()
+        try:
+            return _control_call(
+                "readiness",
+                request=request,
+                workspace_fd=workspace_fd,
+                cancel_event=cancel_event,
+                timeout_override=probe_timeout_seconds,
+                probe_timeout_seconds=probe_timeout_seconds,
+            )
+        except TimeoutError:
+            elapsed = max(0, int((time.monotonic() - control_started) * 1000))
+            return {
+                "schema_version": SCHEMA,
+                "status": "unavailable",
+                "backend": "docker",
+                "ready": False,
+                "stage": "readiness_control",
+                "reason_code": "readiness_timeout",
+                "reason": "Readiness deadline exceeded.",
+                "next_action": "inspect_docker_and_retry_gate",
+                "requirements_qualified": False,
+                "source_snapshot_verified": False,
+                "timings_ms": {"readiness_control": elapsed},
+                "duration_ms": elapsed,
+            }
     report: dict[str, Any] = {
         "schema_version": SCHEMA,
         "status": "unavailable",
         "backend": "docker",
         "ready": False,
         "profile": request.profile,
+        "readiness_level": "structural",
+        "requirements_qualified": False,
+        "source_snapshot_verified": False,
+        "qualification_required": [
+            "immutable_source_snapshot",
+            "in_container_requirements",
+            "execution_and_cleanup",
+        ],
     }
+    phases = _Phases(report)
     owned = client is None
     try:
+        phases.enter("workspace_structure")
+        from rlm.validation.snapshot import pin_directory
+
+        fd = (
+            os.dup(workspace_fd)
+            if workspace_fd is not None
+            else pin_directory(canonical_system_path(Path(request.workspace)))
+        )
+        try:
+            current = os.dup(fd)
+            try:
+                for part in Path(request.cwd).parts:
+                    if part == ".":
+                        continue
+                    child = os.open(
+                        part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current
+                    )
+                    os.close(current)
+                    current = child
+            finally:
+                os.close(current)
+        finally:
+            os.close(fd)
+        if cancel_event is not None and cancel_event.is_set():
+            raise SnapshotCancelledError("readiness cancelled")
+        phases.enter("docker_ping")
         client = client or docker_client()
         client.ping()
+        phases.enter("image_lookup")
         image = client.images.get(request.image)
-        capture_bounded(
-            Path(request.workspace),
-            deadline=time.monotonic() + min(request.timeout_seconds, 10),
-            workspace_fd=workspace_fd,
-            cancelled=lambda: cancel_event is not None and cancel_event.is_set(),
+        report["image_id"] = image.id
+        if image.attrs.get("Config", {}).get("Volumes"):
+            raise ValueError("image-declared volumes bypass validation disk limits")
+        phases.enter("enforcement_capability")
+        report["enforced_capabilities"] = require_capabilities(client)
+        report.update(
+            status="ready", ready=True, next_action="run_in_container_to_qualify_requirements"
         )
+    except Exception as error:
+        codes = {
+            "workspace_structure": ("workspace_invalid", "review_workspace_and_cwd"),
+            "docker_ping": ("docker_unavailable", "start_or_configure_local_docker"),
+            "image_lookup": ("dependency_image_unavailable", "select_a_prepared_dependency_image"),
+            "enforcement_capability": (
+                "enforcement_unsupported",
+                "use_supported_local_linux_docker",
+            ),
+        }
+        code, action = codes.get(phases.stage, ("readiness_error", "inspect_diagnostic"))
+        if isinstance(error, FileNotFoundError) and phases.stage == "docker_ping":
+            code, action = "docker_tool_missing", "configure_docker_tool"
+        report.update(reason_code=code, reason=redact(str(error))[:2000], next_action=action)
+    finally:
+        failed_stage = phases.stage
+        phases.finish()
+        if not report["ready"]:
+            report["stage"] = failed_stage
+        if owned and client is not None:
+            client.close()
+    return report
+
+
+def diagnose(
+    request: ValidationRequest,
+    *,
+    client: Any = None,
+    workspace_fd: int | None = None,
+    cancel_event: threading.Event | None = None,
+    probe_timeout_seconds: int = 30,
+) -> dict[str, Any]:
+    """Explicit deeper probe; gate uses readiness without launching this container."""
+    if type(probe_timeout_seconds) is not int or not 1 <= probe_timeout_seconds <= 60:
+        raise ValueError("probe_timeout_seconds must be an integer from 1 to 60")
+    if client is None and not _ISOLATED_CONTROL:
+        control_started = time.monotonic()
+        try:
+            return _control_call(
+                "diagnose",
+                request=request,
+                workspace_fd=workspace_fd,
+                cancel_event=cancel_event,
+                timeout_override=probe_timeout_seconds + 20,
+                probe_timeout_seconds=probe_timeout_seconds,
+            )
+        except TimeoutError:
+            elapsed = max(0, int((time.monotonic() - control_started) * 1000))
+            return {
+                "schema_version": SCHEMA,
+                "status": "unavailable",
+                "backend": "docker",
+                "ready": False,
+                "stage": "capability_probe",
+                "reason_code": "capability_probe_timeout",
+                "reason": "Capability probe exceeded its bounded control/cleanup deadline.",
+                "requirements_qualified": False,
+                "next_action": "inspect_original_probe_cleanup_evidence",
+                "timings_ms": {"capability_probe": elapsed},
+                "duration_ms": elapsed,
+            }
+    owned = client is None
+    report = readiness(request, client=client, workspace_fd=workspace_fd, cancel_event=cancel_event)
+    if not report["ready"]:
+        return report
+    client = client or docker_client()
+    phases = _Phases(report)
+    try:
+        phases.enter("capability_probe")
         with tempfile.TemporaryDirectory(prefix="snipara-diagnose-") as folder:
             directory = Path(folder).resolve()
             project = directory / "project"
@@ -164,7 +320,7 @@ def diagnose(
                     "argv": ["true"],
                     "cwd": ".",
                     "artifacts": [],
-                    "timeout_seconds": min(request.timeout_seconds, 10),
+                    "timeout_seconds": probe_timeout_seconds,
                     "requirements": request.requirements.model_copy(
                         update={
                             "commands": list(
@@ -177,21 +333,41 @@ def diagnose(
                 }
             )
             checked = run(probe, directory / "runs", client=client, cancel_event=cancel_event)
+            qualified = checked["status"] == "passed" and checked.get("cleanup_complete") is True
             report.update(
-                status="ready" if checked["status"] == "passed" else "incompatible",
-                ready=checked["status"] == "passed",
-                image_id=image.id,
-                docker_version=client.version()["Version"],
+                status="ready" if qualified else "incompatible",
+                ready=qualified,
+                requirements_qualified=qualified,
+                readiness_level="requirements_probe",
                 runtime_versions=checked.get("runtime_versions", ""),
                 probe_status=checked["status"],
+                probe_cleanup_complete=checked.get("cleanup_complete"),
             )
-            if not report["ready"]:
-                report["next_action"] = "needs_user_choice"
+            if not qualified:
+                report.update(
+                    reason_code="probe_cleanup_failed"
+                    if checked.get("cleanup_complete") is not True
+                    else "capability_probe_timeout"
+                    if checked["status"] == "timeout"
+                    else "requirements_unsatisfied",
+                    reason=checked.get(
+                        "error", checked.get("runtime_versions", "Requirements probe failed.")
+                    ),
+                    next_action="inspect_probe_evidence",
+                )
     except Exception as error:
-        report["reason"] = redact(str(error))[:2000]
-        report["next_action"] = "needs_user_choice"
+        report.update(
+            status="incompatible",
+            ready=False,
+            reason_code="capability_probe_error",
+            reason=redact(str(error))[:2000],
+            next_action="inspect_probe_evidence",
+        )
     finally:
-        if owned and client is not None:
+        phases.finish()
+        if not report["ready"]:
+            report["stage"] = "capability_probe"
+        if owned:
             client.close()
     return report
 
@@ -464,6 +640,7 @@ def run(
     owned = client is None
     started = time.monotonic()
     deadline = started + request.timeout_seconds
+    phases = _Phases(receipt)
     monitor_stop = threading.Event()
     abort: dict[str, str] = {}
 
@@ -497,6 +674,7 @@ def run(
         directory.close()
         raise
     try:
+        phases.enter("docker_readiness")
         client = client or docker_client()
         client.ping()
         receipt["enforced_capabilities"] = require_capabilities(client)
@@ -508,6 +686,7 @@ def run(
             "disk": disk,
             "timeout_seconds": request.timeout_seconds,
         }
+        phases.enter("image_lookup")
         image = client.images.get(request.image)
         receipt["image_id"] = image.id
         if image.attrs.get("Config", {}).get("Volumes"):
@@ -517,6 +696,7 @@ def run(
             snapshot.chmod(0o755)
             receipt["snapshot_path"] = str(snapshot.resolve())
             _write(directory, receipt)
+            phases.enter("source_snapshot")
             receipt["snapshot"] = capture_bounded(
                 Path(request.workspace),
                 snapshot,
@@ -537,8 +717,10 @@ def run(
                 raise TimeoutError("validation budget expired during preparation")
             # Fixed bootstrap receives positional argv; user strings are never interpolated.
             bootstrap = 'cp -R /input/. /work/ && cd "$1" && shift && exec "$@" > /tmp/validation-output 2>&1'
+            phases.enter("container_start")
             container = client.containers.create(
                 image.id,
+                init=True,
                 command=["sleep", str(request.timeout_seconds + 15)],
                 name="snipara-validation-" + run_id,
                 labels={LABEL: run_id},
@@ -575,6 +757,7 @@ def run(
                     cancel_event is not None and cancel_event.is_set()
                 )
 
+            phases.enter("requirements_probe")
             probe_code = _execute(
                 container,
                 client,
@@ -604,7 +787,9 @@ def run(
                 receipt["runtime_versions"] = "Runtime probe failed; diagnostic reader unavailable."
             if probe_code != 0:
                 receipt["status"] = "environment_incompatible"
+                receipt["reason_code"] = "requirements_unsatisfied"
             else:
+                phases.enter("command_execution")
                 code = _execute(
                     container,
                     client,
@@ -614,6 +799,7 @@ def run(
                 )
                 receipt["exit_code"] = code
                 receipt["status"] = "passed" if code == 0 else "failed"
+                phases.enter("result_collection")
                 try:
                     output = _read_file(
                         container,
@@ -668,6 +854,8 @@ def run(
     except KeyboardInterrupt:
         receipt["status"] = "cancelled"
     finally:
+        failed_stage = phases.stage
+        phases.enter("cleanup")
         if container is not None:
             try:
                 container.remove(force=True, v=True)
@@ -698,7 +886,23 @@ def run(
         watcher.join(timeout=12)
         if abort.get("reason"):
             receipt["status"] = abort["reason"]
-        receipt["duration_ms"] = int((time.monotonic() - started) * 1000)
+        phases.finish()
+        if receipt["status"] != "passed":
+            receipt["stage"] = (
+                "cleanup" if receipt.get("cleanup_complete") is not True else failed_stage
+            )
+            receipt.setdefault(
+                "reason_code",
+                {
+                    "environment_incompatible": "requirements_unsatisfied",
+                    "timeout": "execution_timeout",
+                    "failed": "command_failed",
+                    "artifact_error": "artifact_collection_failed",
+                    "collection_error": "output_collection_failed",
+                    "cleanup_failed": "cleanup_failed",
+                    "cancelled": "execution_cancelled",
+                }.get(receipt["status"], "validation_error"),
+            )
         receipt["finished_at"] = time.time()
         try:
             _write(directory, receipt)
@@ -863,8 +1067,13 @@ def _process_entry(payload: dict[str, Any], workspace_fd: int) -> dict[str, Any]
         ValidationRequest.model_validate(payload["request"]) if payload.get("request") else None
     )
     action = payload["action"]
-    if action == "diagnose":
-        return diagnose(request, workspace_fd=workspace_fd if workspace_fd >= 0 else None)
+    if action in {"diagnose", "readiness"}:
+        function = diagnose if action == "diagnose" else readiness
+        return function(
+            request,
+            workspace_fd=workspace_fd if workspace_fd >= 0 else None,
+            probe_timeout_seconds=payload.get("probe_timeout_seconds", 30),
+        )
     store = Path(payload["store"])
     if action == "run":
         return run(request, store, workspace_fd=workspace_fd if workspace_fd >= 0 else None)
@@ -891,11 +1100,13 @@ def _control_call(
     workspace_fd: int | None = None,
     cancel_event: threading.Event | None = None,
     timeout_override: float | None = None,
+    probe_timeout_seconds: int = 30,
 ) -> dict[str, Any]:
     """Bound the entire daemon transaction, including control and cleanup calls."""
     run_id = uuid.uuid4().hex if action == "run" else run_id
     payload = {
         "action": action,
+        "probe_timeout_seconds": probe_timeout_seconds,
         "request": request.model_dump() if request else None,
         "store": str(store) if store is not None else None,
         "run_id": run_id,

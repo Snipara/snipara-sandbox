@@ -37,13 +37,15 @@ Sandbox 2.4 adds optional requirements to validation requests:
 }
 ```
 
-`validation gate` and `validation run` check requirements inside the selected
-image before the requested command. Python checks import modules; Node checks
+In Sandbox 2.5, `validation gate` checks structural readiness without starting a
+container; it explicitly leaves runtime requirements unqualified. `validation run`
+checks requirements inside the selected image before the requested command, and
+`validation diagnose` performs an explicit deeper environment probe. Python checks import modules; Node checks
 resolve installed packages (including ESM packages); command checks find named
 executables on PATH. No arbitrary paths, shell snippets or installation requests
 are accepted. Imports can execute package initialization, always within the same
 bounded network-off Docker isolation. Node resolution does not claim package
-execution or browser availability. Broken imports fail readiness too.
+execution or browser availability. Broken imports fail runtime qualification too.
 
 Empty requirements preserve existing v1 receipt hashes and published portable
 scope-v2 choice hashes. Nonempty requirements use scope v3 and are bound into

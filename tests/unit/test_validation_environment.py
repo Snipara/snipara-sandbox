@@ -98,7 +98,7 @@ def test_standalone_gate_refuses_malformed_saved_choice_even_if_docker_ready(tmp
     path = choice_path(req, "lot")
     path.write_text(json.dumps(value))
     before = path.read_bytes()
-    with patch("rlm.validation.environment.diagnose") as diagnose:
+    with patch("rlm.validation.environment.structural_readiness") as diagnose:
         result = gate(req, "lot", readiness={"ready": True})
     assert result["status"] == "needs_user_choice"
     assert result["execution_authorized_by_gate"] is False

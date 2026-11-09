@@ -156,6 +156,14 @@ def test_diagnose_preserves_requirements_and_pnpm_inference(tmp_path, monkeypatc
     client = Mock()
     client.images.get.return_value.id = "sha256:prepared"
     client.version.return_value = {"Version": "test"}
+    client.images.get.return_value.attrs = {"Config": {}}
+    client.info.return_value = {
+        "OSType": "linux",
+        "MemoryLimit": True,
+        "CpuCfsQuota": True,
+        "PidsLimit": True,
+        "SwapLimit": True,
+    }
     monkeypatch.setattr(runner, "capture_bounded", lambda *a, **k: {})
 
     def failed_probe(probe, *args, **kwargs):

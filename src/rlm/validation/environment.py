@@ -11,7 +11,8 @@ from typing import Any
 from rlm.validation.identity import scope_identity
 from rlm.validation.models import ValidationRequest
 from rlm.validation.paths import secure_path
-from rlm.validation.runner import canonical, diagnose
+from rlm.validation.runner import canonical
+from rlm.validation.runner import readiness as structural_readiness
 from rlm.validation.state import StateDirectory
 
 PROMPT = "Snipara Sandbox n'est pas disponible pour ces tests. Souhaitez-vous utiliser un autre environnement, installer/configurer Sandbox, ou continuer sans Sandbox ?"
@@ -81,7 +82,12 @@ def valid_choice(value: Any, identity: str) -> bool:
 
 
 def gate(
-    request: ValidationRequest, scope: str, *, readiness: dict[str, Any] | None = None
+    request: ValidationRequest,
+    scope: str,
+    *,
+    readiness: dict[str, Any] | None = None,
+    probe_timeout_seconds: int = 30,
+    workspace_fd: int | None = None,
 ) -> dict[str, Any]:
     identity = scope_identity(request, scope)
     choice = None
@@ -111,7 +117,13 @@ def gate(
     readiness = (
         {"ready": False, "reason": "saved_choice_invalid_or_expired"}
         if invalid_choice
-        else (diagnose(request) if readiness is None else readiness)
+        else (
+            structural_readiness(
+                request, probe_timeout_seconds=probe_timeout_seconds, workspace_fd=workspace_fd
+            )
+            if readiness is None
+            else readiness
+        )
     )
     if readiness.get("ready") is True:
         return {

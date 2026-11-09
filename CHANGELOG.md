@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## 2.5.0 - 2026-11-09
+
+- Make readiness lightweight: validate current workspace, local Docker/image and
+  enforcement metadata without creating a probe container. Actual execution
+  still checks runtime requirements; explicit diagnose performs the deeper probe.
+- Add prepared Python/Node CI profile contracts, pure request preparation and
+  canonical request inspection. Metadata never authorizes execution or installs tools.
+- Route explicitly scoped MCP validation through compatible installed Orchestrator
+  coordination with a confined root/store, private request, inherited workspace
+  pin and no automatic fallback after launch. Unscoped calls retain raw behavior.
+- Expose fixed phase timings and actionable readiness/runtime failure reasons.
+- Keep bounded probe deadlines separate from repository command timeouts.
+- Use Docker's init process to reap orphaned workload children without relaxing
+  resource limits, isolation or cleanup requirements.
+
 ## 2.4.1 - 2026-10-24
 
 - Hoist nested request-model JSON Schema definitions to the complete MCP tool

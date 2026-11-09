@@ -450,3 +450,12 @@ export interface RepositoryValidationRequest {
     commands?: string[];
   };
 }
+
+/** MCP validation_run arguments. Scope selects installed Orchestrator >=1.15.0 coordination. */
+export interface RepositoryValidationRunArguments {
+  request: RepositoryValidationRequest;
+  /** Explicit workflow/lot; omit only for legacy raw execution. */
+  scope?: string;
+  /** Force fresh scoped execution while retaining exclusion. Requires scope. */
+  no_reuse?: boolean;
+}

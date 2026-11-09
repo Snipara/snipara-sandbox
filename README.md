@@ -1,5 +1,27 @@
 # Snipara Sandbox
 
+Sandbox 2.5 adds lightweight readiness, phase timings and prepared CI profiles:
+
+```sh
+snipara-sandbox validation profiles
+snipara-sandbox validation prepare --profile python-ci --workspace /absolute/project \
+  --image sha256:REVIEWED_LOCAL_IMAGE_ID --output request.json
+snipara-sandbox validation inspect --request request.json
+snipara-sandbox validation gate --request request.json --scope feature-tests
+```
+
+Replace the image placeholder with the digest of an already prepared image.
+Preparation and inspection do not execute or install anything. Gate checks current
+structural readiness; actual run qualifies the declared tools inside its container.
+Use `validation diagnose` for a deeper explicit environment probe.
+
+MCP `validation_run` accepts an explicit `scope` and optional `no_reuse` to use
+installed Orchestrator 1.15 or newer for shared local coordination. Companion 4.1
+and Orchestrator CLI callers can select the same operator-approved coordination
+root. Request defaults/formatting normalize through Sandbox inspection, while
+fresh verification still checks source, image, artifacts and cleanup. Unscoped
+legacy calls remain raw. A missing coordinator never triggers fallback execution.
+
 ## Stateful execution runtime for persistent AI workflows
 
 Modern AI agents can reason, write code, call tools, and solve complex tasks.

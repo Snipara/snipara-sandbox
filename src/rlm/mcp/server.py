@@ -958,6 +958,10 @@ async def _agent_run(
     try:
         from uuid import uuid4
 
+        from rlm.core.optional import require_inference
+
+        require_inference()
+
         from rlm.agent.config import AgentConfig
         from rlm.agent.runner import AgentRunner
         from rlm.core.config import load_config

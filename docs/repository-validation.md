@@ -2,7 +2,9 @@
 
 Sandbox remains standalone. No Snipara account, provider key, LLM inference,
 Companion or Orchestrator is needed for these deterministic commands.
-Install the Docker extra (`snipara-sandbox[docker]`) and select a prepared image.
+Install the validation extra (`snipara-sandbox[validation]`) and select a prepared
+image. The legacy `[docker]` extra remains supported. Add `[mcp]` for the MCP
+transport; no inference, visualization or development extra is required.
 No command below downloads an image, installs project dependencies, or falls
 back to execution on the host. The image must include the project's dependencies.
 Use immutable image references in release requests; receipts resolve the local

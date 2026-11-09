@@ -8,11 +8,17 @@ import warnings
 from collections.abc import AsyncGenerator
 from typing import Any
 
-import litellm
-from litellm import acompletion
-
 from rlm.backends.base import BackendResponse, BaseBackend, Tool
+from rlm.core.optional import require_inference
 from rlm.core.types import Message, ToolCall
+
+try:
+    import litellm
+    from litellm import acompletion
+except ModuleNotFoundError as error:
+    if error.name == "litellm":
+        require_inference()
+    raise
 
 logger = logging.getLogger(__name__)
 

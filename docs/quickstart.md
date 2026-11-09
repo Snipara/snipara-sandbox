@@ -5,11 +5,14 @@ Get started with Snipara Sandbox in 5 minutes.
 ## Installation
 
 ```bash
-# Basic install
-pip install snipara-sandbox
+# Provider examples in this guide
+pip install 'snipara-sandbox[inference]'
+
+# Account-free deterministic validation and MCP, without inference
+pip install 'snipara-sandbox[validation,mcp]'
 
 # With Docker support (recommended for production)
-pip install snipara-sandbox[docker]
+pip install 'snipara-sandbox[inference,docker]'
 
 # With MCP server (for Claude Desktop/Code)
 pip install snipara-sandbox[mcp]
@@ -28,6 +31,10 @@ pip install snipara-sandbox[all]
 ```
 
 ## Setup
+
+Sandbox 3.0 keeps provider dependencies optional. Pure validation/MCP users do not
+need an LLM API key or `[inference]`; the model/agent examples below do. Existing
+`[all]` installations retain their full capabilities.
 
 ### 1. Initialize Configuration
 

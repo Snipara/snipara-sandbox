@@ -139,14 +139,17 @@ In short: Snipara keeps the context alive. Snipara Sandbox keeps the execution a
 ## Installation
 
 ```bash
-# Basic install
+# Core configuration, types and restricted snippets (no inference dependency)
 pip install snipara-sandbox
 
-# With Docker sandbox support
-pip install snipara-sandbox[docker]
+# Deterministic repository validation
+pip install 'snipara-sandbox[validation]'
 
-# With MCP server support
-pip install snipara-sandbox[mcp]
+# Deterministic validation and MCP server support
+pip install 'snipara-sandbox[validation,mcp]'
+
+# Provider-backed run/agent commands and the Python inference API
+pip install 'snipara-sandbox[inference]'
 
 # With Snipara integration
 pip install snipara-sandbox[snipara]
@@ -155,7 +158,14 @@ pip install snipara-sandbox[snipara]
 pip install snipara-sandbox[all]
 ```
 
-Package version in this repo: `2.4.1`.
+Python package version in this repo: `3.0.0`. The TypeScript SDK remains `2.5.0`;
+its unchanged MCP types and utilities work with this Python release.
+
+Version 3 separates inference from installation of the deterministic runtime.
+Existing provider users should select `[inference]` (or `[inference,docker]` for
+Docker REPL inference). Existing `[all]` installations retain the full inference,
+development and visualization capabilities; `[docker]` remains a supported alias
+for Docker support. No command installs missing capabilities automatically.
 
 For deterministic repository tests without an LLM API key or Snipara account,
 use the [repository validation workflow](docs/repository-validation.md).
@@ -165,6 +175,8 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 ## Quick Start
 
 ### CLI
+
+The provider examples below require the optional `[inference]` installation.
 
 ```bash
 snipara-sandbox init

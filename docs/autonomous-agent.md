@@ -2,6 +2,12 @@
 
 ## Status: Implemented
 
+Install `snipara-sandbox[inference]` to use the provider-backed agent commands in
+Sandbox 3.0. Deterministic validation/MCP users can instead install
+`snipara-sandbox[validation,mcp]` without the inference stack. Selecting an agent
+command without the extra returns an installation instruction; it does not
+install dependencies or fall back to another execution mode.
+
 The Autonomous Snipara Sandbox Agent implements the full Recursive Language Model loop. The model explores documentation, writes and executes code, spawns sub-LLM calls, and terminates when it has enough information to answer.
 
 This is the capstone feature that combines all prior capabilities:

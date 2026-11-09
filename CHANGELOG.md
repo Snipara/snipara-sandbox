@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## 3.0.0 - 2026-11-09
+
+- Breaking Python packaging change: LiteLLM is now an optional `[inference]`
+  capability. Provider-backed run/agent commands and default Python backend
+  construction explain the extra when missing; no installation is implicit.
+- Add a minimal `[validation]` extra for Docker repository checks. `[mcp]` includes
+  the Docker client and MCP transport without inference, visualization or dev
+  tooling. Restricted snippets retain their existing lightweight base dependency.
+- Keep `[all]` and `[dev]` inference-capable, preserve the `[docker]` alias, and
+  explicitly provide TOML parsing on Python 3.10.
+- Keep public Python imports lazy and optional doctor checks metadata-only.
+  Deterministic CLI metadata and MCP startup do not load provider integrations.
+- The unchanged TypeScript SDK remains at 2.5.0; MCP validation contracts are
+  unchanged.
+
 ## 2.5.0 - 2026-11-09
 
 - Make readiness lightweight: validate current workspace, local Docker/image and

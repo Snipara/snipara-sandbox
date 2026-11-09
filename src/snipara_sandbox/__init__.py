@@ -8,10 +8,8 @@ import importlib
 import sys
 
 import rlm as _rlm
-from rlm import *  # noqa: F403
-from rlm import RLMConfig, SniparaSandbox, __version__
+from rlm import RLMConfig, __version__
 
-Sandbox = SniparaSandbox
 SniparaSandboxConfig = RLMConfig
 Config = RLMConfig
 
@@ -34,3 +32,12 @@ __all__ = [
     "SniparaSandboxConfig",
     "Config",
 ]
+
+
+def __getattr__(name: str):
+    """Forward public names without eagerly loading the inference runtime."""
+    if name in _rlm.__all__:
+        value = getattr(_rlm, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(name)

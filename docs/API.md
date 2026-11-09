@@ -2,6 +2,11 @@
 
 This document provides a comprehensive API reference for Snipara Sandbox.
 
+Provider-backed `SniparaSandbox`/`RLM` construction requires the optional
+`snipara-sandbox[inference]` installation in Sandbox 3.0. Importing configuration,
+types or deterministic validation APIs does not require inference. Custom
+backend implementations retain their own dependency requirements.
+
 ## Table of Contents
 
 - [Main Classes](#main-classes)

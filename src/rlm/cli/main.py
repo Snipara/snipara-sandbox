@@ -293,7 +293,12 @@ def main(
     ),
 ) -> None:
     """Top-level CLI callback."""
-    if ctx.invoked_subcommand not in {"validation", "mcp-serve"} and not version:
+    # Provider commands load their config only after capability admission. Pure
+    # validation/MCP/version commands never need repository environment files.
+    if (
+        ctx.invoked_subcommand not in {"validation", "mcp-serve", "version", "run", "agent"}
+        and not version
+    ):
         _load_project_env()
 
     if version:
@@ -417,6 +422,10 @@ def run(
     from rlm.core.types import CompletionOptions
 
     def _execute() -> object:
+        if not show_config:
+            from rlm.core.optional import require_inference
+
+            require_inference()
         config = load_config(config_file)
 
         # Check for Claude Code context without API keys
@@ -559,6 +568,10 @@ def agent(
     from rlm.core.orchestrator import RLM
 
     def _execute() -> object:
+        if not show_config:
+            from rlm.core.optional import require_inference
+
+            require_inference()
         config = load_config(config_file)
 
         # Check for Claude Code context without API keys
@@ -1103,7 +1116,7 @@ def doctor() -> None:
     console.print("[bold]Snipara Sandbox Doctor[/bold]")
     console.print()
 
-    checks: list[tuple[str, bool, str]] = []
+    checks: list[tuple[str, bool | None, str]] = []
 
     # Check Python version
     import sys
@@ -1113,7 +1126,7 @@ def doctor() -> None:
     checks.append(("Python version", py_ok, py_version))
 
     # Check required packages
-    required = ["litellm", "RestrictedPython", "pydantic", "structlog", "typer"]
+    required = ["RestrictedPython", "pydantic", "structlog", "typer"]
     for pkg in required:
         try:
             __import__(pkg.replace("-", "_"))
@@ -1123,18 +1136,27 @@ def doctor() -> None:
 
     # Check optional packages
     optional = [
+        ("litellm", "litellm (inference extra)"),
         ("docker", "docker"),
         ("snipara_mcp", "snipara-mcp"),
         ("mcp", "mcp"),
         ("streamlit", "streamlit"),
         ("plotly", "plotly"),
     ]
+    from importlib.util import find_spec
+
     for module, pkg in optional:
         try:
-            __import__(module)
-            checks.append((f"Optional: {pkg}", True, "installed"))
-        except ImportError:
-            checks.append((f"Optional: {pkg}", None, "not installed"))  # type: ignore
+            available = find_spec(module) is not None
+        except (ImportError, ValueError):
+            available = False
+        checks.append(
+            (
+                f"Optional: {pkg}",
+                True if available else None,
+                "available (not loaded)" if available else "not installed",
+            )
+        )
 
     # Check Docker
     try:
@@ -1151,7 +1173,7 @@ def doctor() -> None:
     if config_path.exists():
         checks.append(("Config file", True, str(config_path)))
     else:
-        checks.append(("Config file", None, "not found (optional)"))  # type: ignore
+        checks.append(("Config file", None, "not found (optional)"))
 
     # Check API keys
     import os
@@ -1161,7 +1183,7 @@ def doctor() -> None:
         if os.environ.get(key):
             checks.append((f"Env: {key}", True, "set"))
         else:
-            checks.append((f"Env: {key}", None, "not set"))  # type: ignore
+            checks.append((f"Env: {key}", None, "not set"))
 
     # Print results
     table = Table()

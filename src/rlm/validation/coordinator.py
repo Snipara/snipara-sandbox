@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from rlm.validation.managed_toolchain import ManagedToolchainError, selected_toolchain
 from rlm.validation.models import SCHEMA, ValidationRequest
 from rlm.validation.paths import secure_path
 from rlm.validation.runner import CONTROL_ENV, canonical, redact
@@ -32,11 +33,12 @@ def _execute(
     timeout: int,
     workspace_fd: int,
     cancel_event: threading.Event | None,
+    environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     process = subprocess.Popen(
         argv,
         cwd=root,
-        env=CONTROL_ENV,
+        env=CONTROL_ENV if environment is None else environment,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -116,7 +118,13 @@ def coordinated_run(
             raise ValueError("Coordinated workspace and store must remain in the operator root")
         if not stat.S_ISDIR(os.fstat(workspace_fd).st_mode):
             raise ValueError("Coordinated validation requires a pinned workspace directory")
-        executable = shutil.which("snipara-orchestrator")
+        managed = selected_toolchain()
+        environment = managed.environment(CONTROL_ENV) if managed else None
+        executable = (
+            str(managed.components["orchestrator"].command)
+            if managed
+            else shutil.which("snipara-orchestrator")
+        )
         if not executable:
             return {
                 "status": "coordinator_unavailable",
@@ -132,12 +140,17 @@ def coordinated_run(
             timeout=10,
             workspace_fd=workspace_fd,
             cancel_event=cancel_event,
+            environment=environment,
         )
         match = re.fullmatch(r"snipara-orchestrator (\d+)\.(\d+)\.(\d+)\s*", version.stdout)
         if (
             version.returncode
             or not match
             or tuple(map(int, match.groups())) < MINIMUM_ORCHESTRATOR
+            or (
+                managed is not None
+                and ".".join(match.groups()) != managed.components["orchestrator"].version
+            )
         ):
             return {
                 "status": "coordinator_incompatible",
@@ -148,9 +161,13 @@ def coordinated_run(
             }
         sibling = Path(sys.executable).parent / "snipara-sandbox"
         sandbox = (
-            str(sibling)
-            if sibling.is_file() and os.access(sibling, os.X_OK)
-            else shutil.which("snipara-sandbox")
+            str(managed.components["sandbox"].command)
+            if managed
+            else (
+                str(sibling)
+                if sibling.is_file() and os.access(sibling, os.X_OK)
+                else shutil.which("snipara-sandbox")
+            )
         )
         if not sandbox:
             raise ValueError("Current Sandbox CLI entrypoint is unavailable")
@@ -197,6 +214,7 @@ def coordinated_run(
             timeout=request.timeout_seconds + 180,
             workspace_fd=workspace_fd,
             cancel_event=cancel_event,
+            environment=environment,
         )
         value = json.loads(result.stdout)
         if not isinstance(value, dict):
@@ -244,9 +262,13 @@ def coordinated_run(
             if launched
             else "validation_contract_invalid",
             "execution_authorized_by_gate": False,
-            "reason_code": "coordinator_execution_uncertain"
-            if launched
-            else "coordinator_contract_invalid",
+            "reason_code": (
+                error.code
+                if isinstance(error, ManagedToolchainError)
+                else "coordinator_execution_uncertain"
+                if launched
+                else "coordinator_contract_invalid"
+            ),
             "stage": phase,
             "reason": redact(str(error))[:2000],
             "duration_ms": max(0, int((time.monotonic() - started) * 1000)),

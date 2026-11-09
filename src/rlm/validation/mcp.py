@@ -13,6 +13,11 @@ from typing import Any
 from mcp.types import CallToolResult, TextContent, Tool
 
 from rlm.validation.coordinator import coordinated_run
+from rlm.validation.managed_toolchain import (
+    ManagedToolchainError,
+    managed_validation_scope,
+    selected_toolchain,
+)
 from rlm.validation.models import ValidationRequest
 from rlm.validation.paths import canonical_system_path, secure_path
 from rlm.validation.profiles_catalog import inspect_request, validation_profiles
@@ -62,19 +67,19 @@ def validation_tools() -> list[Tool]:
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 256,
-                "description": "Recommended normal path: explicit workflow/lot scope selects optional installed Orchestrator coordination and verified reuse. Omission retains legacy raw execution outside the coordination guarantee.",
+                "description": "Managed local-work derives a canonical request lot when omitted; optional explicit workflow/lot scopes use the same coordinator. Standalone connections retain legacy raw execution on omission.",
             }
             properties["no_reuse"] = {
                 "type": "boolean",
                 "default": False,
-                "description": "Force fresh scoped execution, retaining exclusion; requires scope.",
+                "description": "Force fresh coordinated execution, retaining exclusion; managed connections derive scope when omitted.",
             }
         result.append(
             Tool(
                 name=name,
                 description="Deterministic repository validation in owned Docker jobs; confined to configured workspace; no installation, inference or local fallback. "
                 + (
-                    "Scope is the recommended normal path. Omission retains legacy raw execution outside the coordination guarantee. "
+                    "Managed local-work always coordinates, including omitted scope; standalone omission retains legacy raw execution. "
                     if name == "validation_run"
                     else ""
                 )
@@ -94,6 +99,7 @@ def validation_tools() -> list[Tool]:
 async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolResult:
     workspace_fd = None
     try:
+        managed = selected_toolchain()
         if name == "validation_profiles":
             if arguments:
                 raise ValueError("validation_profiles takes no arguments")
@@ -127,7 +133,7 @@ async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolRe
         ):
             raise ValueError("scope must be an explicit bounded workflow/lot string")
         no_reuse = arguments.get("no_reuse", False)
-        if type(no_reuse) is not bool or (no_reuse and scope is None):
+        if type(no_reuse) is not bool or (no_reuse and scope is None and managed is None):
             raise ValueError("no_reuse requires an explicit scope and a boolean value")
         root = root.absolute()
         store = secure_path(root / ".snipara/validation")
@@ -136,6 +142,8 @@ async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolRe
         request = None
         if "request" in arguments:
             request = ValidationRequest.model_validate(arguments["request"])
+            if name == "validation_run" and managed is not None and scope is None:
+                scope = managed_validation_scope(inspect_request(request)["request_sha256"])
             workspace = canonical_system_path(Path(request.workspace))
             if not workspace.is_relative_to(root):
                 raise ValueError("workspace is outside operator-configured MCP root")
@@ -233,6 +241,19 @@ async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolRe
             content=[TextContent(type="text", text=json.dumps(value))],
             structuredContent=value,
             isError=error,
+        )
+    except ManagedToolchainError as error:
+        value = {
+            "status": "managed_toolchain_needs_attention",
+            "reason_code": error.code,
+            "execution_authorized_by_gate": False,
+            "reason": str(error),
+            "next_action": "create-snipara repair --profile local-work; reconnect the native client",
+        }
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(value))],
+            structuredContent=value,
+            isError=True,
         )
     except Exception as error:
         return CallToolResult(

@@ -2946,23 +2946,24 @@ wheels = [
 
 [[package]]
 name = "snipara-sandbox"
-version = "2.4.1"
+version = "3.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "httpx" },
-    { name = "litellm" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "restrictedpython" },
     { name = "rich" },
     { name = "structlog" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "typer" },
 ]
 
 [package.optional-dependencies]
 all = [
     { name = "docker" },
+    { name = "litellm" },
     { name = "mcp" },
     { name = "mypy" },
     { name = "plotly" },
@@ -2978,6 +2979,7 @@ all = [
 ]
 dev = [
     { name = "docker" },
+    { name = "litellm" },
     { name = "mcp" },
     { name = "mypy" },
     { name = "plotly" },
@@ -2990,11 +2992,18 @@ dev = [
 docker = [
     { name = "docker" },
 ]
+inference = [
+    { name = "litellm" },
+]
 mcp = [
+    { name = "docker" },
     { name = "mcp" },
 ]
 snipara = [
     { name = "snipara-mcp" },
+]
+validation = [
+    { name = "docker" },
 ]
 visualizer = [
     { name = "plotly" },
@@ -3011,8 +3020,11 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.2.0" },
     { name = "docker", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "docker", marker = "extra == 'docker'", specifier = ">=7.0.0" },
+    { name = "docker", marker = "extra == 'mcp'", specifier = ">=7.0.0" },
+    { name = "docker", marker = "extra == 'validation'", specifier = ">=7.0.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "litellm", specifier = ">=1.50.0" },
+    { name = "litellm", marker = "extra == 'dev'", specifier = ">=1.50.0" },
+    { name = "litellm", marker = "extra == 'inference'", specifier = ">=1.50.0" },
     { name = "mcp", marker = "extra == 'dev'", specifier = ">=1.13.0,<2" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.13.0,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
@@ -3028,10 +3040,11 @@ requires-dist = [
     { name = "rich", specifier = ">=13.7.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.2.0" },
     { name = "snipara-mcp", marker = "extra == 'snipara'", specifier = ">=1.3.0" },
-    { name = "snipara-sandbox", extras = ["docker", "wasm", "snipara", "mcp", "visualizer", "dev"], marker = "extra == 'all'" },
+    { name = "snipara-sandbox", extras = ["validation", "wasm", "snipara", "mcp", "inference", "visualizer", "dev"], marker = "extra == 'all'" },
     { name = "streamlit", marker = "extra == 'dev'", specifier = ">=1.30.0" },
     { name = "streamlit", marker = "extra == 'visualizer'", specifier = ">=1.30.0" },
     { name = "structlog", specifier = ">=24.1.0" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.0" },
     { name = "typer", specifier = ">=0.12.0" },
 ]
 

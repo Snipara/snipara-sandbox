@@ -2,7 +2,7 @@
 
 **Run bounded checks with inspectable evidence, or execute stateful Python tools.**
 
-The Python source package is **3.0.0**. Deterministic repository validation needs
+The Python source package is **3.1.0**. Deterministic repository validation needs
 no Snipara account or model API key. Provider-backed inference is optional and
 requires the `[inference]` extra. The TypeScript SDK has its own version.
 
@@ -181,7 +181,7 @@ pip install 'snipara-sandbox[snipara]'
 pip install 'snipara-sandbox[all]'
 ```
 
-Python package version in this repo: `3.0.0`. The TypeScript SDK remains `2.5.0`;
+Python package version in this repo: `3.1.0`. The TypeScript SDK remains `2.5.0`;
 its unchanged MCP types and utilities work with this Python release.
 
 Version 3 separates inference from installation of the deterministic runtime.

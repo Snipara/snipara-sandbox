@@ -2,12 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 3.1.0 - 2026-11-13
 
 - Add `snipara-sandbox validation engine --image <image>`: creates one container with the validation runner's
   settings on the selected engine and tests each isolation property from inside. Exits 2 when one is not honoured.
 - Document the container engine contract (any Docker Engine API on a local Unix socket), the 64 MiB cap of `/tmp`,
   the two kinds of profile names, and how to read an unknown source tree in isolation.
+- Validation commands report an unusable request (missing field, malformed JSON, file over 64 KiB) as one line
+  on stderr with exit code 2 instead of a Python traceback.
 
 ## 3.0.0 - 2026-11-09
 

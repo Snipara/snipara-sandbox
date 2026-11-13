@@ -18,9 +18,26 @@ app = typer.Typer(
 
 
 def load_request(path: Path) -> ValidationRequest:
-    if path.stat().st_size > 65536:
-        raise ValueError("request exceeds 64 KiB")
-    return ValidationRequest.model_validate_json(path.read_text())
+    """Load a request, reporting an unusable file as one line instead of a traceback."""
+    from pydantic import ValidationError
+
+    try:
+        if path.stat().st_size > 65536:
+            raise ValueError("request exceeds 64 KiB")
+        return ValidationRequest.model_validate_json(path.read_text())
+    except ValidationError as error:
+        problems = [
+            f"{'.'.join(str(part) for part in item['loc']) or 'request'}: {item['msg']}"
+            for item in error.errors(include_url=False, include_input=False)[:8]
+        ]
+        remaining = error.error_count() - len(problems)
+        if remaining > 0:
+            problems.append(f"and {remaining} more")
+        reason = "; ".join(problems)
+    except (OSError, ValueError) as error:
+        reason = str(error)
+    typer.echo(f"Invalid validation request {path.name}: {reason}"[:2000], err=True)
+    raise typer.Exit(2)
 
 
 def output(value: object) -> None:

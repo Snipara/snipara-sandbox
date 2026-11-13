@@ -103,3 +103,30 @@ def test_mcp_config_does_not_import_repository_environment(tmp_path, monkeypatch
     assert config.trust_level == "sandboxed"
     assert "DOCKER_HOST" not in os.environ
     assert "SNIPARA_SANDBOX_VALIDATION_WORKSPACE" not in os.environ
+
+
+def test_cli_reports_an_unusable_request_as_one_line(tmp_path):
+    from typer.testing import CliRunner
+
+    from rlm.validation.cli import app
+
+    runner = CliRunner()
+    empty = tmp_path / "empty.json"
+    empty.write_text("{}")
+    result = runner.invoke(app, ["gate", "--request", str(empty), "--scope", "lot:a"])
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+    assert "Invalid validation request empty.json:" in result.output
+    assert "Field required" in result.output
+
+    broken = tmp_path / "broken.json"
+    broken.write_text("not json")
+    result = runner.invoke(app, ["inspect", "--request", str(broken)])
+    assert result.exit_code == 2
+    assert "Invalid validation request broken.json:" in result.output
+
+    large = tmp_path / "large.json"
+    large.write_text(" " * 65537)
+    result = runner.invoke(app, ["run", "--request", str(large)])
+    assert result.exit_code == 2
+    assert "request exceeds 64 KiB" in result.output

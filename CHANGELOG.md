@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- Add `snipara-sandbox validation engine --image <image>`: creates one container with the validation runner's
+  settings on the selected engine and tests each isolation property from inside. Exits 2 when one is not honoured.
+- Document the container engine contract (any Docker Engine API on a local Unix socket), the 64 MiB cap of `/tmp`,
+  the two kinds of profile names, and how to read an unknown source tree in isolation.
+
 ## 3.0.0 - 2026-11-09
 
 - Breaking Python packaging change: LiteLLM is now an optional `[inference]`

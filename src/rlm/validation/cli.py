@@ -68,6 +68,22 @@ def prepare_command(
     output(value)
 
 
+@app.command("engine")
+def engine_command(
+    image: str = typer.Option(
+        ...,
+        help="A local image (any small Linux image with a shell) to create the probe container from.",
+    ),
+) -> None:
+    """Check that the selected container engine enforces the isolation a validation job relies on."""
+    from rlm.validation.engine_check import engine_check
+
+    result = engine_check(image)
+    output(result)
+    if not result["ok"]:
+        raise typer.Exit(2)
+
+
 @app.command("diagnose")
 def diagnose_command(
     request: Path = typer.Option(..., exists=True, dir_okay=False),

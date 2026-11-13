@@ -110,6 +110,76 @@ REPL backends remain separate; use repository validation for the lifecycle and
 proof contract described here. The old REPL Docker path is not covered by these
 new job guarantees.
 
+## Container engine
+
+Validation talks to the Docker Engine API; it does not need Docker Desktop. The engine is the one of the selected
+`docker context`, or of `DOCKER_HOST` when it is set (it wins over the context). Only a local Unix socket is
+accepted. Images are looked up in that engine's own store, so build or load the prepared image there.
+
+```bash
+docker context ls
+DOCKER_CONTEXT=<name> snipara-sandbox validation gate --request request.json --scope my-check
+```
+
+What a job needs from an engine:
+
+- `info` reports a Linux engine with memory, CPU quota, PID and swap limits (checked before dispatch);
+- a container can be created with an init process, a read-only root, user `65534:65534`, no network, every
+  capability dropped, `no-new-privileges`, memory and swap limits, a CPU quota, a PID limit, a `/dev/shm` size, sized
+  `tmpfs` mounts for `/work` and `/tmp`, a read-only bind mount and the `json-file` log driver;
+- `exec` create, start and inspect, and `kill`.
+
+Loopback inside the job works by address (`127.0.0.1`, `::1`); with the network off there is no resolver file, so
+the name `localhost` may not resolve. An engine that accepts these options without enforcing them gives no
+isolation, so check a new engine before trusting its results:
+
+```bash
+DOCKER_CONTEXT=<name> snipara-sandbox validation engine --image <a local Linux image>
+```
+
+It creates one container with the settings above, enters it with `exec` and tests each property from inside (user id,
+read-only root, writable and executable `/work`, `/tmp` size, read-only input, no route and no active interface,
+loopback, init process, no capability, `no_new_privs`, memory and process limits), then kills and removes it. It
+prints a JSON report and exits 2 when a property is not honoured. The loopback test needs `python3` in the image and
+is reported as skipped without it.
+
+## Writable space
+
+`/work`, `/tmp` and `/dev/shm` are `tmpfs` mounts cut from the request's `disk_mb`. `/tmp` and `/dev/shm` each get a
+quarter of the budget, capped at 64 MiB; `/work` gets the rest. A test suite that writes more than 64 MiB of
+temporary files fails with "No space left on device" whatever `disk_mb` says: point its temporary directory at a
+directory under `/work` for that command (`TMPDIR=/work/.tmp`), keeping `/tmp` for tools that expect it.
+
+## Profile names
+
+A request's `profile` is `python`, `node` or `mixed`. `validation prepare --profile` takes a catalogue name
+(`python-ci`, `node-ci`; list them with `validation profiles`) and writes the matching request profile: a request
+prepared with `--profile python-ci` records `"profile": "python"`.
+
+## Reading an unknown source tree
+
+The same commands give a place to inspect code you do not trust yet, before building or installing it: the tree is
+copied read-only into a container with no network, no capability and an unprivileged user, and nothing from it has
+to be executed.
+
+1. Clone or unpack the tree into an empty directory. Keep your own inspection script in a sibling directory of
+   the same workspace, not inside the tree.
+2. Prepare, gate and run with any image that has the interpreter of your script:
+
+   ```bash
+   snipara-sandbox validation prepare --profile python-ci --workspace /abs/audit --image <image-id> \
+     --output request.json -- bash -c 'cd /work && python3 -I tools/scan.py /work/src'
+   snipara-sandbox validation gate --request request.json --scope audit
+   snipara-sandbox validation run --request request.json --store /abs/audit-store
+   ```
+
+   `python3 -I` keeps the interpreter from importing modules that sit next to the script or in the tree.
+3. The command's output is `output.log` in the run's directory of the store; the receipt printed by `run` gives the
+   status and timings.
+
+This is a static reading aid (inventory of binaries, dependency sources, endpoints, privileged calls). It says
+nothing about a released binary that was not built from that tree.
+
 ## Harness integration
 
 Companion and Orchestrator consume the public CLI as adapters. Probe capabilities

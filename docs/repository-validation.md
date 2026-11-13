@@ -131,8 +131,17 @@ What a job needs from an engine:
 
 Loopback inside the job works by address (`127.0.0.1`, `::1`); with the network off there is no resolver file, so
 the name `localhost` may not resolve. An engine that accepts these options without enforcing them gives no
-isolation: check a new engine from inside a container (user id, read-only root, `/tmp` size, cgroup limits, no
-route) before trusting its results.
+isolation, so check a new engine before trusting its results:
+
+```bash
+DOCKER_CONTEXT=<name> snipara-sandbox validation engine --image <a local Linux image>
+```
+
+It creates one container with the settings above, enters it with `exec` and tests each property from inside (user id,
+read-only root, writable and executable `/work`, `/tmp` size, read-only input, no route and no active interface,
+loopback, init process, no capability, `no_new_privs`, memory and process limits), then kills and removes it. It
+prints a JSON report and exits 2 when a property is not honoured. The loopback test needs `python3` in the image and
+is reported as skipped without it.
 
 ## Writable space
 

@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased (3.2.0)
+
+- `snipara-sandbox validation run --request <file> --scope <lot> --store <dir>` now
+  coordinates scoped work natively: one private lock per work identity, a
+  per-repository receipt index under `.snipara/validation-reuse/`, and reuse only
+  after a fresh source/image/artifact verification. `--no-reuse` executes fresh
+  while keeping exclusion; optional `--coordination-root` confines request,
+  workspace, store and reuse state. The JSON keeps the Orchestrator contract
+  (`status`, `work_reuse.state` of `executed|reused|needs_review|in_progress`,
+  `schema_version`, `backend`, `cleanup_complete`, `exit_code`, `run_id`).
+- Removed: Sandbox no longer runs `snipara-orchestrator validation run --scope`.
+  The MCP `validation_run` scoped path uses the same native coordination; the
+  Orchestrator version probe, its `coordinator_unavailable` /
+  `coordinator_incompatible` outcomes and the `.snipara/coordinated-requests`
+  private copies are gone. An index written by Orchestrator
+  (`.snipara/orchestrator/validation-reuse/`) is not read, so the first scoped
+  run after upgrading executes fresh.
+- MCP scoped contract errors now report `validation_reuse_needs_review` with
+  `reason_code: scoped_contract_invalid` (previously `validation_contract_invalid`),
+  and a `passed` result whose receipt failed verification (`work_reuse.state:
+  needs_review`) is flagged as an error.
+
 ## 3.1.0 - 2026-11-13
 
 - Add `snipara-sandbox validation engine --image <image>`: creates one container with the validation runner's

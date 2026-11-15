@@ -67,7 +67,7 @@ def validation_tools() -> list[Tool]:
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 256,
-                "description": "Managed local-work derives a canonical request lot when omitted; optional explicit workflow/lot scopes use the same coordinator. Standalone connections retain legacy raw execution on omission.",
+                "description": "Managed local-work derives a canonical request lot when omitted; optional explicit workflow/lot scopes use the same native Sandbox coordination (per-work exclusion, freshly verified receipt reuse). Standalone connections retain legacy raw execution on omission.",
             }
             properties["no_reuse"] = {
                 "type": "boolean",
@@ -236,6 +236,10 @@ async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolRe
             }
             or value.get("valid") is False
             or value.get("ready") is False
+            or (
+                isinstance(value.get("work_reuse"), dict)
+                and value["work_reuse"].get("state") == "needs_review"
+            )
         )
         return CallToolResult(
             content=[TextContent(type="text", text=json.dumps(value))],

@@ -266,3 +266,52 @@ async def test_verifier_response_has_no_execution_mode_sideband(tmp_path):
         )
     assert result.structuredContent == proof
     assert "coordination_mode" not in result.structuredContent
+
+
+def _receipt():
+    return {
+        "schema_version": "snipara.sandbox.validation.v1",
+        "run_id": "a" * 32,
+        "backend": "docker",
+        "status": "passed",
+        "cleanup_complete": True,
+        "exit_code": 0,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("valid", [True, False])
+async def test_scoped_mcp_runs_native_coordination_and_flags_unverified_pass(tmp_path, valid):
+    (tmp_path / ".git").mkdir()
+    receipt = _receipt()
+    proof = {
+        "schema_version": "snipara.sandbox.validation.v1",
+        "run_id": "a" * 32,
+        "valid": valid,
+        "reasons": [] if valid else ["snapshot_changed"],
+        "receipt": receipt,
+    }
+    ready = {"status": "sandbox_ready", "readiness": {"ready": True, "backend": "docker"}}
+    with (
+        patch("rlm.validation.coordinator.gate", return_value=ready),
+        patch("rlm.validation.coordinator.run", return_value=receipt) as launch,
+        patch("rlm.validation.coordinator.verify", return_value=proof),
+        patch("rlm.validation.mcp.run", side_effect=AssertionError("raw fallback")),
+    ):
+        result = await handle(
+            "validation_run",
+            {
+                "request": {
+                    "workspace": str(tmp_path),
+                    "image": "sha256:" + "a" * 64,
+                    "argv": ["python", "-V"],
+                },
+                "scope": "workflow/lot",
+            },
+            tmp_path,
+        )
+    launch.assert_called_once()
+    value = result.structuredContent
+    assert value["coordination_mode"] == "coordinated" and value["status"] == "passed"
+    assert value["work_reuse"]["state"] == ("executed" if valid else "needs_review")
+    assert result.isError is (not valid)

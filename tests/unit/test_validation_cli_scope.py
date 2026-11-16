@@ -69,11 +69,14 @@ def invoke(*args):
 
 
 def test_help_lists_the_companion_contract_options():
+    # Companion probes with an allowlisted environment (no GITHUB_ACTIONS/FORCE_COLOR),
+    # so Typer prints plain text; inheriting CI variables would force ANSI colour.
+    env = {name: os.environ[name] for name in ("PATH", "HOME") if name in os.environ}
     result = subprocess.run(
         [sys.executable, "-c", ENTRY, "validation", "run", "--help"],
         capture_output=True,
         text=True,
-        env={**os.environ, "PYTHONPATH": SRC, "COLUMNS": "120"},
+        env={**env, "PYTHONPATH": SRC, "COLUMNS": "120"},
         timeout=60,
     )
     assert result.returncode == 0, result.stderr

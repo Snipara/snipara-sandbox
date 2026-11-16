@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased (3.3.0)
+## 3.3.0 - 2026-11-16
 
 - The managed toolchain check accepts the generation with Companion 7.x: Companion 7.x,
   Orchestrator 2.1 or a later 2.x, Sandbox 3.x. Companion 6.x bundles are refused as

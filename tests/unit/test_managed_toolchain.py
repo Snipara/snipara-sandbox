@@ -188,11 +188,12 @@ async def test_invalid_managed_selection_never_uses_a_raw_request(bundle):
     coordinate.assert_not_called()
 
 
-def test_managed_coordinator_selects_exact_peers_and_manifest_environment(bundle):
-    base, _, manifest, filename, _ = bundle
-    request = ValidationRequest(workspace=str(base), image="prepared", argv=["python", "-V"])
+def test_managed_scoped_run_is_native_and_never_launches_orchestrator(bundle):
+    base, _, manifest, _, _ = bundle
+    request = ValidationRequest(
+        workspace=str(base), image="sha256:" + "c" * 64, argv=["python", "-V"]
+    )
     fd = pin_directory(base)
-    calls = []
     receipt = {
         "status": "passed",
         "schema_version": "snipara.sandbox.validation.v1",
@@ -200,29 +201,31 @@ def test_managed_coordinator_selects_exact_peers_and_manifest_environment(bundle
         "backend": "docker",
         "cleanup_complete": True,
         "exit_code": 0,
-        "work_reuse": {"state": "reused"},
     }
+    orchestrator = manifest["components"]["orchestrator"]["command"]
+    real_popen = subprocess.Popen
 
-    def execute(argv, **kwargs):
-        calls.append((argv, kwargs))
-        assert argv[0] == manifest["components"]["orchestrator"]["command"]
-        assert kwargs["environment"]["SNIPARA_TOOLCHAIN_MANIFEST"] == str(filename)
-        if argv[-1] == "--version":
-            return subprocess.CompletedProcess(argv, 0, "snipara-orchestrator 1.16.0\n", "")
-        assert (
-            argv[argv.index("--sandbox-command") + 1]
-            == manifest["components"]["sandbox"]["command"]
-        )
-        return subprocess.CompletedProcess(argv, 0, json.dumps(receipt), "")
+    def popen(argv, *args, **kwargs):
+        assert orchestrator not in map(str, argv), "Orchestrator delegation is gone"
+        return real_popen(argv, *args, **kwargs)
 
+    ready = {"status": "sandbox_ready", "readiness": {"ready": True, "backend": "docker"}}
     try:
         with (
-            patch("rlm.validation.coordinator.selected_toolchain", return_value=load(bundle)),
+            patch("rlm.validation.mcp.selected_toolchain", return_value=load(bundle)),
+            patch("subprocess.Popen", side_effect=popen),
+            patch("rlm.validation.coordinator.gate", return_value=ready),
+            patch("rlm.validation.coordinator.run", return_value=receipt) as launch,
             patch(
-                "rlm.validation.coordinator.shutil.which",
-                side_effect=AssertionError("PATH fallback"),
+                "rlm.validation.coordinator.verify",
+                return_value={
+                    "schema_version": "snipara.sandbox.validation.v1",
+                    "run_id": "a" * 32,
+                    "valid": True,
+                    "reasons": [],
+                    "receipt": receipt,
+                },
             ),
-            patch("rlm.validation.coordinator._execute", side_effect=execute),
         ):
             result = coordinated_run(
                 request,
@@ -231,6 +234,8 @@ def test_managed_coordinator_selects_exact_peers_and_manifest_environment(bundle
                 scope="snipara-validation:" + "b" * 64,
                 workspace_fd=fd,
             )
-        assert result == receipt and len(calls) == 2
+        assert result == {**receipt, "work_reuse": result["work_reuse"]}
+        assert result["work_reuse"]["state"] == "executed"
+        launch.assert_called_once()
     finally:
         os.close(fd)

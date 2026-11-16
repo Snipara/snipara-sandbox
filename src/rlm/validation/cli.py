@@ -17,8 +17,8 @@ app = typer.Typer(
 )
 
 
-def load_request(path: Path) -> ValidationRequest:
-    """Load a request, reporting an unusable file as one line instead of a traceback."""
+def parse_request(path: Path) -> ValidationRequest | str:
+    """Return the request, or a one-line reason why the file is unusable."""
     from pydantic import ValidationError
 
     try:
@@ -36,8 +36,16 @@ def load_request(path: Path) -> ValidationRequest:
         reason = "; ".join(problems)
     except (OSError, ValueError) as error:
         reason = str(error)
-    typer.echo(f"Invalid validation request {path.name}: {reason}"[:2000], err=True)
-    raise typer.Exit(2)
+    return f"Invalid validation request {path.name}: {reason}"[:2000]
+
+
+def load_request(path: Path) -> ValidationRequest:
+    """Load a request, reporting an unusable file as one line instead of a traceback."""
+    request = parse_request(path)
+    if isinstance(request, str):
+        typer.echo(request, err=True)
+        raise typer.Exit(2)
+    return request
 
 
 def output(value: object) -> None:
@@ -121,24 +129,69 @@ def diagnose_command(
 def run_command(
     request: Path = typer.Option(..., exists=True, dir_okay=False),
     store: Path = typer.Option(Path(".snipara/validation")),
+    scope: str | None = typer.Option(
+        None,
+        help="Workflow/lot scope: hold one lock per identical work and reuse a freshly verified "
+        "passing receipt instead of executing again.",
+    ),
+    no_reuse: bool = typer.Option(
+        False, "--no-reuse", help="Execute fresh while retaining scoped exclusion (needs --scope)."
+    ),
+    coordination_root: Path | None = typer.Option(
+        None,
+        file_okay=False,
+        help="Confine the scoped request, workspace, store and reuse state to this operator root.",
+    ),
     workspace_fd: int | None = typer.Option(None, min=0, hidden=True),
 ) -> None:
+    """Run a request once in Docker; with --scope, coordinate and reuse verified work."""
     import signal
     import threading
 
+    if scope is None and (no_reuse or coordination_root is not None):
+        from rlm.validation.coordinator import blocked
+
+        output(blocked("--no-reuse and --coordination-root require an explicit --scope."))
+        raise typer.Exit(2)
     event = threading.Event()
     previous = signal.signal(signal.SIGTERM, lambda *_: event.set())
     try:
-        result = run(
-            load_request(request),
-            store,
-            cancel_event=event,
-            workspace_fd=directory_fd(workspace_fd),
-        )
+        if scope is None:
+            result = run(
+                load_request(request),
+                store,
+                cancel_event=event,
+                workspace_fd=directory_fd(workspace_fd),
+            )
+        else:
+            from rlm.validation.coordinator import blocked, coordinated_run
+            from rlm.validation.paths import canonical_system_path
+
+            loaded = parse_request(request)
+            if isinstance(loaded, str):
+                result = blocked(loaded, reason_code="request_invalid")
+            elif coordination_root is not None and not canonical_system_path(
+                request
+            ).is_relative_to(canonical_system_path(coordination_root)):
+                result = blocked("Request must remain within the coordination root.")
+            else:
+                result = coordinated_run(
+                    loaded,
+                    store,
+                    scope=scope,
+                    root=coordination_root,
+                    no_reuse=no_reuse,
+                    cancel_event=event,
+                    workspace_fd=directory_fd(workspace_fd),
+                )
     finally:
         signal.signal(signal.SIGTERM, previous)
     output(result)
-    if result["status"] != "passed":
+    if scope is not None:
+        state = result.get("work_reuse", {}).get("state")
+        if result.get("status") != "passed" or state not in {"executed", "reused"}:
+            raise typer.Exit(2)
+    elif result["status"] != "passed":
         raise typer.Exit(1)
 
 

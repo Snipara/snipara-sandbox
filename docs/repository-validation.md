@@ -41,7 +41,32 @@ snipara-sandbox validation run --request request.json --store /absolute/proof-st
 snipara-sandbox validation status --run-id <id> --store /absolute/proof-store
 snipara-sandbox validation verify --request request.json --run-id <id> --store /absolute/proof-store
 snipara-sandbox validation cancel --run-id <id> --store /absolute/proof-store
+snipara-sandbox validation run --request request.json --scope workflow-lot-id --store /absolute/proof-store
 ```
+
+### Scoped runs and receipt reuse
+
+`validation run --scope <lot>` coordinates the work itself (before 3.2.0 this
+was delegated to `snipara-orchestrator validation run --scope`). It requires an
+immutable `sha256` image and:
+
+1. takes one private OS lock per work identity (request, scope, repository,
+   workspace, store, image, Sandbox version and implementation). An identical
+   run already in progress returns `validation_in_progress`;
+2. refuses with `validation_reuse_needs_review` while a pending marker from an
+   interrupted or uncleaned earlier execution exists;
+3. runs the gate; anything but `sandbox_ready` (including a recorded choice) is
+   returned with `work_reuse.state: needs_review` and nothing executes;
+4. reuses an indexed passing receipt younger than 24 h only if a fresh
+   `verify` of source, image, log and artifacts accepts it (`reused`);
+5. otherwise executes once (`executed`) and indexes the receipt only after it
+   verifies. `--no-reuse` skips step 4 but keeps the lock.
+
+State lives in `<repository>/.snipara/validation-reuse/` (0700, files 0600),
+where the repository is `--coordination-root` when given, else the nearest Git
+checkout containing the workspace. After reviewing the original evidence of a
+`previous_execution_uncertain` lot, delete its `<key>.pending.json` there. The
+exit code is 0 only for `passed` with `executed` or `reused`, otherwise 2.
 
 `gate` runs an isolated readiness probe. If the required environment cannot run,
 it returns `needs_user_choice` with a question. The choices are another named
@@ -182,7 +207,7 @@ nothing about a released binary that was not built from that tree.
 
 ## Harness integration
 
-Companion and Orchestrator consume the public CLI as adapters. Probe capabilities
+Companion consumes the public CLI as an adapter. Probe capabilities
 before executable validation. Missing executable, old schema, incompatible image,
 missing daemon or user refusal must never trigger local fallback. Install a
 Sandbox verifier as a policy-owned required proof for new Controller lots.

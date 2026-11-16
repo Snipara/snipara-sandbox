@@ -35,15 +35,22 @@ receipt and verify its exact source, image and artifacts before reuse or
 integration. Read [repository validation](docs/repository-validation.md) for
 request fields, offline preparation, evidence and explicit environment choices.
 
-Direct CLI execution is standalone. For coordinated lots and verified receipt
-reuse, use Companion or Orchestrator's scoped validation entry point.
+Coordinated lots and verified receipt reuse are built in: add `--scope <lot>` to
+`validation run`. Sandbox then holds one lock per identical work, reuses a passing
+receipt only after freshly verifying its source, image and artifacts, and otherwise
+executes once (`--no-reuse` forces a fresh run). The JSON reports
+`work_reuse.state` (`executed`, `reused`, `needs_review` or `in_progress`).
+No Orchestrator is needed or consulted.
 
-MCP `validation_run` accepts an explicit `scope` and optional `no_reuse` to use
-installed Orchestrator 1.15 or newer for shared local coordination. Companion 4.1
-and Orchestrator CLI callers can select the same operator-approved coordination
-root. Request defaults/formatting normalize through Sandbox inspection, while
-fresh verification still checks source, image, artifacts and cleanup. Unscoped
-legacy calls remain raw. A missing coordinator never triggers fallback execution.
+```sh
+snipara-sandbox validation run --request request.json --scope feature-tests \
+  --store .snipara/validation
+```
+
+MCP `validation_run` accepts the same explicit `scope` and optional `no_reuse`.
+Managed local-work derives a canonical request lot when `scope` is omitted;
+unscoped standalone calls remain raw. A blocked or uncertain lot never triggers
+fallback execution.
 
 ## Stateful execution runtime for persistent AI workflows
 

@@ -26,7 +26,7 @@ def bundle(tmp_path):
     binaries = root / "bin"
     binaries.mkdir(mode=0o700)
     components = {}
-    for name, version in (("companion", "4.2.0"), ("orchestrator", "1.16.0"), ("sandbox", "3.1.0")):
+    for name, version in (("companion", "6.0.0"), ("orchestrator", "2.1.0"), ("sandbox", "3.1.0")):
         command = binaries / ("snipara-" + name)
         command.write_bytes(b"#!/usr/bin/env python3\n# synthetic, never dispatched\n")
         command.chmod(0o700)
@@ -102,6 +102,28 @@ def test_modified_pinned_component_fails_before_subprocess_dispatch(bundle, monk
     command.write_bytes(command.read_bytes() + b"# changed\n")
     with pytest.raises(managed.ManagedToolchainError, match="changed"):
         managed.selected_toolchain()
+
+
+@pytest.mark.parametrize(
+    ("component", "version"),
+    [
+        ("companion", "5.2.0"),
+        ("companion", "4.2.0"),
+        ("companion", "7.0.0"),
+        ("orchestrator", "2.0.0"),
+        ("orchestrator", "1.16.0"),
+        ("sandbox", "2.5.0"),
+    ],
+)
+def test_other_component_generations_are_refused(bundle, component, version):
+    # The accepted generation is the one create-snipara 2.2.13 installs:
+    # Companion 6.x, Orchestrator 2.1 or a later 2.x, Sandbox 3.x.
+    _, _, manifest, filename, _ = bundle
+    manifest["components"][component]["version"] = version
+    filename.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(managed.ManagedToolchainError) as failure:
+        load(bundle)
+    assert failure.value.code == "toolchain_version_incompatible"
 
 
 def test_stale_sdk_identity_requires_reconnection(bundle):

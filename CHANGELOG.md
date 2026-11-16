@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased (3.2.0)
+## 3.2.0 - 2026-11-16
 
 - `snipara-sandbox validation run --request <file> --scope <lot> --store <dir>` now
   coordinates scoped work natively: one private lock per work identity, a
@@ -23,6 +23,11 @@ All notable changes to this project are documented in this file.
   `reason_code: scoped_contract_invalid` (previously `validation_contract_invalid`),
   and a `passed` result whose receipt failed verification (`work_reuse.state:
   needs_review`) is flagged as an error.
+- The managed toolchain check accepts the generation create-snipara 2.2.13 installs:
+  Companion 6.x, Orchestrator 2.1 or a later 2.x, Sandbox 3.x. It still required
+  Companion 4.2+ and Orchestrator 1.16+, so every bundle installed by create-snipara
+  2.2.12 (Companion 5.2.0, Orchestrator 2.0.0) or 2.2.13 was refused as
+  `toolchain_version_incompatible`. Companion 6.0.0 applies the same rule.
 
 ## 3.1.0 - 2026-11-13
 

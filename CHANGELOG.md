@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased (3.2.0)
+## 3.2.0 - 2026-11-16
 
 - `snipara-sandbox validation run --request <file> --scope <lot> --store <dir>` now
   coordinates scoped work natively: one private lock per work identity, a

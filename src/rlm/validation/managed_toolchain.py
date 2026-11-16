@@ -156,7 +156,7 @@ def load_managed_toolchain(
             raise ValueError("Invalid managed component/capability declarations")
         components = {}
         for name, major, minimum_minor in (
-            ("companion", 6, 0),
+            ("companion", 7, 0),
             ("orchestrator", 2, 1),
             ("sandbox", 3, 0),
         ):

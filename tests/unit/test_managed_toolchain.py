@@ -17,8 +17,7 @@ from rlm.validation.profiles_catalog import inspect_request
 from rlm.validation.snapshot import pin_directory
 
 
-@pytest.fixture
-def bundle(tmp_path):
+def make_bundle(tmp_path, names=("companion", "orchestrator", "sandbox")):
     base = tmp_path.resolve()
     base.chmod(0o700)
     root = base / "bundle"
@@ -26,7 +25,9 @@ def bundle(tmp_path):
     binaries = root / "bin"
     binaries.mkdir(mode=0o700)
     components = {}
-    for name, version in (("companion", "7.0.0"), ("orchestrator", "2.1.0"), ("sandbox", "3.3.0")):
+    versions = {"companion": "8.0.0", "orchestrator": "2.1.0", "sandbox": "3.4.0"}
+    for name in names:
+        version = versions[name]
         command = binaries / ("snipara-" + name)
         command.write_bytes(b"#!/usr/bin/env python3\n# synthetic, never dispatched\n")
         command.chmod(0o700)
@@ -51,12 +52,18 @@ def bundle(tmp_path):
     return base, root, manifest, filename, active
 
 
+@pytest.fixture
+def bundle(tmp_path):
+    """A bundle that still declares the retired Orchestrator, as older installers wrote it."""
+    return make_bundle(tmp_path)
+
+
 def load(bundle):
     _, _, manifest, _, active = bundle
     return managed.load_managed_toolchain(
         active,
         runtime_command=Path(manifest["components"]["sandbox"]["command"]),
-        runtime_version="3.3.0",
+        runtime_version="3.4.0",
     )
 
 
@@ -107,18 +114,20 @@ def test_modified_pinned_component_fails_before_subprocess_dispatch(bundle, monk
 @pytest.mark.parametrize(
     ("component", "version"),
     [
-        ("companion", "8.0.0"),
+        ("companion", "9.0.0"),
+        ("companion", "7.0.1"),
         ("companion", "6.0.0"),
         ("companion", "5.2.0"),
         ("companion", "4.2.0"),
         ("orchestrator", "2.0.0"),
         ("orchestrator", "1.16.0"),
         ("sandbox", "2.5.0"),
+        ("sandbox", "3.3.0"),
     ],
 )
 def test_other_component_generations_are_refused(bundle, component, version):
-    # The accepted generation is the one create-snipara installs with Companion 7:
-    # Companion 7.x, Orchestrator 2.1 or a later 2.x, Sandbox 3.x.
+    # The accepted generation is the one create-snipara installs with Companion 8:
+    # Companion 8.x and Sandbox 3.4 or a later 3.x; Orchestrator, if still declared, 2.1+.
     _, _, manifest, filename, _ = bundle
     manifest["components"][component]["version"] = version
     filename.write_text(json.dumps(manifest), encoding="utf-8")
@@ -127,11 +136,26 @@ def test_other_component_generations_are_refused(bundle, component, version):
     assert failure.value.code == "toolchain_version_incompatible"
 
 
+def test_a_bundle_without_orchestrator_is_accepted(tmp_path):
+    current = make_bundle(tmp_path, names=("companion", "sandbox"))
+    selected = load(current)
+    assert sorted(selected.components) == ["companion", "sandbox"]
+
+
+@pytest.mark.parametrize("missing", ["companion", "sandbox"])
+def test_companion_and_sandbox_stay_required(tmp_path, missing):
+    _, _, manifest, filename, _ = current = make_bundle(tmp_path)
+    del manifest["components"][missing]
+    filename.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises((managed.ManagedToolchainError, KeyError)):
+        load(current)
+
+
 def test_stale_sdk_identity_requires_reconnection(bundle):
     _, root, manifest, _, active = bundle
     with pytest.raises(managed.ManagedToolchainError) as failure:
         managed.load_managed_toolchain(
-            active, runtime_command=root / "missing-sdk", runtime_version="3.3.0"
+            active, runtime_command=root / "missing-sdk", runtime_version="3.4.0"
         )
     assert failure.value.code == "toolchain_reconnect_required"
     with pytest.raises(managed.ManagedToolchainError) as failure:

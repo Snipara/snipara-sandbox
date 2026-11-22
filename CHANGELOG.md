@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## 3.4.0 - 2026-11-22
+
+- The managed toolchain no longer needs Orchestrator. The accepted generation is Companion
+  8.x and Sandbox 3.4 or a later 3.x. A bundle that still declares Orchestrator 2.1 or a
+  later 2.x is accepted and its file is verified like the others; it is never run.
+  Companion 7.x bundles are refused as `toolchain_version_incompatible`; reinstall with
+  the current create-snipara.
+
 ## 3.3.0 - 2026-11-16
 
 - The managed toolchain check accepts the generation with Companion 7.x: Companion 7.x,

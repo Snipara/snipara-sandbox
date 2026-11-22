@@ -155,12 +155,16 @@ def load_managed_toolchain(
         ):
             raise ValueError("Invalid managed component/capability declarations")
         components = {}
-        for name, major, minimum_minor in (
-            ("companion", 7, 0),
-            ("orchestrator", 2, 1),
-            ("sandbox", 3, 0),
+        # Orchestrator is retired: a bundle may still declare it, and it is then checked like
+        # the others, but it is never required and never run.
+        for name, major, minimum_minor, required in (
+            ("companion", 8, 0, True),
+            ("orchestrator", 2, 1, False),
+            ("sandbox", 3, 4, True),
         ):
             item = declared.get(name)
+            if item is None and not required:
+                continue
             if not isinstance(item, dict):
                 raise ValueError("Missing managed component")
             version = item.get("version")

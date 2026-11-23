@@ -157,3 +157,75 @@ class TestAugmentedAssignment:
         assert not outcome.success
         assert error in outcome.error
         assert "_inplacevar_" not in outcome.error
+
+
+class TestLocalREPLDeadlineAndFreshness:
+    """A call stops at its timeout, and the same code is run again each time."""
+
+    @pytest.mark.asyncio
+    async def test_infinite_loop_is_stopped_at_the_timeout(self):
+        import time
+
+        repl = LocalREPL()
+        started = time.time()
+        result = await repl.execute("while True:\n    pass", timeout=1)
+        assert result.error == "Execution timed out after 1 seconds"
+        assert time.time() - started < 4
+        # The session is usable again once the worker has stopped.
+        again = await repl.execute("print('alive')")
+        assert again.error is None and again.output == "alive\n"
+
+    @pytest.mark.asyncio
+    async def test_a_loop_that_catches_exceptions_is_still_stopped(self):
+        repl = LocalREPL()
+        code = "while True:\n    try:\n        pass\n    except Exception:\n        pass"
+        result = await repl.execute(code, timeout=1)
+        assert result.error == "Execution timed out after 1 seconds"
+
+    @pytest.mark.asyncio
+    async def test_the_event_loop_stays_free_while_code_runs(self):
+        import asyncio
+
+        repl = LocalREPL()
+        ticks = 0
+
+        async def tick():
+            nonlocal ticks
+            while True:
+                ticks += 1
+                await asyncio.sleep(0.05)
+
+        ticker = asyncio.create_task(tick())
+        await repl.execute("while True:\n    pass", timeout=1)
+        ticker.cancel()
+        assert ticks >= 5, "the caller's loop must keep running during an execution"
+
+    @pytest.mark.asyncio
+    async def test_blocking_native_call_answers_at_the_timeout_and_holds_the_session(self):
+        import asyncio
+        import time
+
+        repl = LocalREPL()
+        started = time.time()
+        result = await repl.execute("import time\ntime.sleep(5)", timeout=1)
+        assert "timed out" in result.error
+        assert time.time() - started < 4.5
+        busy = await repl.execute("print(1)")
+        assert "still stopping" in busy.error
+        await asyncio.sleep(3)
+        assert (await repl.execute("print(1)")).output == "1\n"
+
+    @pytest.mark.asyncio
+    async def test_the_same_code_runs_again_each_time(self):
+        repl = LocalREPL()
+        await repl.execute("n = 0")
+        outputs = [(await repl.execute("n += 1\nprint(n)")).output for _ in range(3)]
+        assert outputs == ["1\n", "2\n", "3\n"]
+
+    @pytest.mark.asyncio
+    async def test_a_result_is_not_reported_by_the_next_call(self):
+        repl = LocalREPL()
+        first = await repl.execute("result = 42")
+        assert "result = 42" in first.output
+        second = await repl.execute("print('no result here')")
+        assert second.output == "no result here\n"

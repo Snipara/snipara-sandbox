@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## 3.5.1 - 2026-11-23
+
+- The sandbox applies the execution timeout. Code used to run on the server's event loop with
+  no deadline: a `while True` loop blocked the whole server, and a call with a 5 second
+  profile could run for 20 seconds. Code now runs in a worker thread that is interrupted at
+  the timeout, and the call answers `Execution timed out after N seconds`. A blocking native
+  call cannot be interrupted: the answer still comes at the timeout, and the session refuses
+  new work until that call returns.
+- The same code is executed again on every call. The result cache is off by default: its key
+  ignored the session's variables, so `n += 1` returned the first result every time.
+- A `result` set by one call is no longer reported by the next call.
+
 ## 3.5.0 - 2026-11-23
 
 - `execute_python` over MCP returns its output in the structured content too

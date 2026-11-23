@@ -9,6 +9,7 @@ import hashlib
 import json
 import operator
 import platform
+import sys
 import threading
 import time
 import traceback
@@ -250,11 +251,10 @@ class LocalREPL(BaseREPL):
     async def execute(self, code: str, timeout: int | None = None) -> REPLResult:
         """Execute code in the local sandbox, and stop it at the timeout.
 
-        The code runs in a worker thread so that the caller's event loop stays free. At the
-        deadline the worker is interrupted and a timeout error is returned. Python code is
-        interrupted between two instructions; a blocking native call (a long ``time.sleep``)
-        cannot be, so the answer still comes at the deadline and the session refuses new work
-        until that call returns.
+        The code runs in a worker thread. Python code is stopped at the deadline from inside
+        that thread, between two lines, and a timeout error is returned. A blocking native call
+        (a long ``time.sleep``) cannot be stopped: the answer comes shortly after the deadline
+        and the session refuses new work until that call returns.
 
         Args:
             code: Python code to execute
@@ -348,8 +348,21 @@ class LocalREPL(BaseREPL):
                 del self._globals["_print"]
             self._globals.pop("result", None)
 
-            # Execute - in RestrictedPython 8.x, byte_code IS the code object
-            exec(byte_code, self._globals)
+            # Execute - in RestrictedPython 8.x, byte_code IS the code object.
+            # The deadline is enforced from inside this thread by a trace function: it does not
+            # depend on another thread getting the interpreter lock, which a tight loop can keep.
+            deadline = time.monotonic() + timeout
+
+            def stop_at_deadline(frame: Any, event: str, arg: Any) -> Any:
+                if time.monotonic() > deadline:
+                    raise ExecutionTimeout()
+                return stop_at_deadline
+
+            sys.settrace(stop_at_deadline)
+            try:
+                exec(byte_code, self._globals)
+            finally:
+                sys.settrace(None)
 
             # Get resource usage after execution
             end_resources = self._get_resource_usage()

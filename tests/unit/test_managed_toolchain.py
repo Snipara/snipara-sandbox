@@ -25,7 +25,7 @@ def make_bundle(tmp_path, names=("companion", "orchestrator", "sandbox")):
     binaries = root / "bin"
     binaries.mkdir(mode=0o700)
     components = {}
-    versions = {"companion": "8.0.0", "orchestrator": "2.1.0", "sandbox": "3.4.0"}
+    versions = {"companion": "9.0.0", "orchestrator": "2.1.0", "sandbox": "3.5.0"}
     for name in names:
         version = versions[name]
         command = binaries / ("snipara-" + name)
@@ -63,7 +63,7 @@ def load(bundle):
     return managed.load_managed_toolchain(
         active,
         runtime_command=Path(manifest["components"]["sandbox"]["command"]),
-        runtime_version="3.4.0",
+        runtime_version="3.5.0",
     )
 
 
@@ -114,7 +114,8 @@ def test_modified_pinned_component_fails_before_subprocess_dispatch(bundle, monk
 @pytest.mark.parametrize(
     ("component", "version"),
     [
-        ("companion", "9.0.0"),
+        ("companion", "10.0.0"),
+        ("companion", "8.0.0"),
         ("companion", "7.0.1"),
         ("companion", "6.0.0"),
         ("companion", "5.2.0"),
@@ -123,11 +124,12 @@ def test_modified_pinned_component_fails_before_subprocess_dispatch(bundle, monk
         ("orchestrator", "1.16.0"),
         ("sandbox", "2.5.0"),
         ("sandbox", "3.3.0"),
+        ("sandbox", "3.4.0"),
     ],
 )
 def test_other_component_generations_are_refused(bundle, component, version):
-    # The accepted generation is the one create-snipara installs with Companion 8:
-    # Companion 8.x and Sandbox 3.4 or a later 3.x; Orchestrator, if still declared, 2.1+.
+    # The accepted generation is the one create-snipara installs with Companion 9:
+    # Companion 9.x and Sandbox 3.5 or a later 3.x; Orchestrator, if still declared, 2.1+.
     _, _, manifest, filename, _ = bundle
     manifest["components"][component]["version"] = version
     filename.write_text(json.dumps(manifest), encoding="utf-8")
@@ -155,7 +157,7 @@ def test_stale_sdk_identity_requires_reconnection(bundle):
     _, root, manifest, _, active = bundle
     with pytest.raises(managed.ManagedToolchainError) as failure:
         managed.load_managed_toolchain(
-            active, runtime_command=root / "missing-sdk", runtime_version="3.4.0"
+            active, runtime_command=root / "missing-sdk", runtime_version="3.5.0"
         )
     assert failure.value.code == "toolchain_reconnect_required"
     with pytest.raises(managed.ManagedToolchainError) as failure:

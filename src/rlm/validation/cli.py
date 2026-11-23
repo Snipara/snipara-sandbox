@@ -10,7 +10,7 @@ from pathlib import Path
 import typer
 
 from rlm.validation.models import ValidationRequest
-from rlm.validation.runner import cancel, diagnose, read_run, run, verify
+from rlm.validation.runner import cancel, diagnose, read_run, run, verify, with_output_tail
 
 app = typer.Typer(
     help="Validate explicit repository snapshots in Docker; no automatic installation or host fallback."
@@ -186,6 +186,7 @@ def run_command(
                 )
     finally:
         signal.signal(signal.SIGTERM, previous)
+    result = with_output_tail(result, store)
     output(result)
     if scope is not None:
         state = result.get("work_reuse", {}).get("state")

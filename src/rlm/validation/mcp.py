@@ -21,7 +21,15 @@ from rlm.validation.managed_toolchain import (
 from rlm.validation.models import ValidationRequest
 from rlm.validation.paths import canonical_system_path, secure_path
 from rlm.validation.profiles_catalog import inspect_request, validation_profiles
-from rlm.validation.runner import cancel, diagnose, read_run, recover, run, verify
+from rlm.validation.runner import (
+    cancel,
+    diagnose,
+    read_run,
+    recover,
+    run,
+    verify,
+    with_output_tail,
+)
 from rlm.validation.snapshot import excluded, pin_directory_bounded
 
 NAMES = {
@@ -212,7 +220,7 @@ async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolRe
         if name == "validation_run":
             # Response-only sideband: persisted receipts remain exact verifier-owned evidence.
             value = {
-                **value,
+                **with_output_tail(value, store),
                 "coordination_mode": "coordinated" if scope is not None else "legacy_raw",
             }
         error = (

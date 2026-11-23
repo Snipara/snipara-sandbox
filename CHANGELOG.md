@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## 3.5.2 - 2026-11-23
+
+- `validation run` answers with the end of the command's output: `output_tail` (the last
+  2,000 characters of the run's log) and `output_tail_truncated`, on the CLI and over MCP. A
+  failed check used to say only `failed` and an exit code; the reason was in `output.log`
+  of the evidence store. The persisted receipt is unchanged, so `validation verify` works as
+  before.
+
 ## 3.5.1 - 2026-11-23
 
 - The sandbox applies the execution timeout. Code used to run on the server's event loop with

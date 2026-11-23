@@ -117,6 +117,33 @@ def _read_receipt(directory: StateDirectory, run_id: str) -> dict[str, Any]:
     return value
 
 
+OUTPUT_TAIL_CHARS = 2000
+
+
+def with_output_tail(value: dict[str, Any], store: Path) -> dict[str, Any]:
+    """Add the end of the run's log to a response, read from the evidence store.
+
+    Response-only: the persisted receipt is untouched, so its verification is unchanged. A
+    caller sees why a command failed without opening ``output.log`` itself. Nothing is added
+    when the run has no log (a refused or still running run, or a missing store).
+    """
+    run_id = value.get("run_id")
+    if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
+        return value
+    try:
+        with open_run(store, run_id) as directory:
+            if not directory.exists("output.log"):
+                return value
+            text = directory.read("output.log", MAX_LOG).decode("utf-8", errors="replace")
+    except (OSError, ValueError):
+        return value
+    return {
+        **value,
+        "output_tail": text[-OUTPUT_TAIL_CHARS:],
+        "output_tail_truncated": len(text) > OUTPUT_TAIL_CHARS,
+    }
+
+
 def read_run(store: Path, run_id: str) -> dict[str, Any]:
     if not RUN_ID.fullmatch(run_id):
         raise ValueError("invalid run id")

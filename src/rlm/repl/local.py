@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import builtins
+import ctypes
 import hashlib
 import json
 import operator
 import platform
+import sys
+import threading
 import time
 import traceback
 from collections import OrderedDict
@@ -34,6 +38,19 @@ from rlm.repl.safety import (
     is_import_allowed,
     truncate_output,
 )
+
+
+class ExecutionTimeout(BaseException):
+    """Raised inside the worker thread at the deadline. Not an Exception: sandboxed code that
+    catches ``Exception`` must not swallow it."""
+
+
+def _interrupt_thread(thread: threading.Thread) -> None:
+    """Ask the interpreter to raise ExecutionTimeout in ``thread`` at its next instruction."""
+    if thread.ident is not None:
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_ulong(thread.ident), ctypes.py_object(ExecutionTimeout)
+        )
 
 
 def _safe_import(name: str, *args: Any, **kwargs: Any) -> Any:
@@ -98,14 +115,16 @@ class LocalREPL(BaseREPL):
         self,
         timeout: int = MAX_EXECUTION_TIME,
         cache_size: int = 100,
-        cache_enabled: bool = True,
+        cache_enabled: bool = False,
     ):
         """Initialize the local REPL.
 
         Args:
             timeout: Maximum execution time in seconds
             cache_size: Max number of cached results (LRU eviction)
-            cache_enabled: Enable/disable result caching
+            cache_enabled: Reuse the result of an identical call. Off by default: the session
+                keeps variables between calls, so the same code can give a different result,
+                and a cached answer would be a result that was never computed.
         """
         self.timeout = timeout
         self._globals: dict[str, Any] = {}
@@ -115,6 +134,7 @@ class LocalREPL(BaseREPL):
         self._cache_enabled = cache_enabled
         self._cache_hits = 0
         self._cache_misses = 0
+        self._running: threading.Thread | None = None
         self._setup_globals()
 
     def _setup_globals(self) -> None:
@@ -229,7 +249,12 @@ class LocalREPL(BaseREPL):
         self._cache_misses = 0
 
     async def execute(self, code: str, timeout: int | None = None) -> REPLResult:
-        """Execute code in the local sandbox.
+        """Execute code in the local sandbox, and stop it at the timeout.
+
+        The code runs in a worker thread. Python code is stopped at the deadline from inside
+        that thread, between two lines, and a timeout error is returned. A blocking native call
+        (a long ``time.sleep``) cannot be stopped: the answer comes shortly after the deadline
+        and the session refuses new work until that call returns.
 
         Args:
             code: Python code to execute
@@ -239,6 +264,40 @@ class LocalREPL(BaseREPL):
             REPLResult with output, error, and timing
         """
         timeout = timeout or self.timeout
+        if self._running is not None and self._running.is_alive():
+            return REPLResult(
+                output="",
+                error="A previous execution in this session timed out and is still stopping; retry shortly.",
+                execution_time_ms=0,
+            )
+        started = time.time()
+        box: list[REPLResult] = []
+        worker = threading.Thread(
+            target=lambda: box.append(self._execute_blocking(code, timeout)),
+            name="rlm-repl-exec",
+            daemon=True,
+        )
+        self._running = worker
+        worker.start()
+        deadline = started + timeout
+        while worker.is_alive() and time.time() < deadline:
+            await asyncio.sleep(0.01)
+        if worker.is_alive():
+            # Keep interrupting: restricted code may catch the first exception.
+            grace_ends = time.time() + 2.0
+            while worker.is_alive() and time.time() < grace_ends:
+                _interrupt_thread(worker)
+                await asyncio.sleep(0.05)
+            return REPLResult(
+                output="",
+                error=f"Execution timed out after {timeout} seconds",
+                execution_time_ms=int((time.time() - started) * 1000),
+            )
+        self._running = None
+        return box[0]
+
+    def _execute_blocking(self, code: str, timeout: int) -> REPLResult:
+        """Compile and run the code in the calling thread."""
         start_time = time.time()
 
         # Check cache first
@@ -283,12 +342,27 @@ class LocalREPL(BaseREPL):
             # Sync context
             self._globals["context"] = self._context
 
-            # Clear any previous print collector
+            # Clear any previous print collector, and the previous call's result: it would be
+            # reported again as if this call had produced it.
             if "_print" in self._globals:
                 del self._globals["_print"]
+            self._globals.pop("result", None)
 
-            # Execute - in RestrictedPython 8.x, byte_code IS the code object
-            exec(byte_code, self._globals)
+            # Execute - in RestrictedPython 8.x, byte_code IS the code object.
+            # The deadline is enforced from inside this thread by a trace function: it does not
+            # depend on another thread getting the interpreter lock, which a tight loop can keep.
+            deadline = time.monotonic() + timeout
+
+            def stop_at_deadline(frame: Any, event: str, arg: Any) -> Any:
+                if time.monotonic() > deadline:
+                    raise ExecutionTimeout()
+                return stop_at_deadline
+
+            sys.settrace(stop_at_deadline)
+            try:
+                exec(byte_code, self._globals)
+            finally:
+                sys.settrace(None)
 
             # Get resource usage after execution
             end_resources = self._get_resource_usage()
@@ -337,6 +411,12 @@ class LocalREPL(BaseREPL):
 
             return result
 
+        except ExecutionTimeout:
+            return REPLResult(
+                output="",
+                error=f"Execution timed out after {timeout} seconds",
+                execution_time_ms=int((time.time() - start_time) * 1000),
+            )
         except Exception as e:
             error_msg = self._format_error(e, code)
             return REPLResult(

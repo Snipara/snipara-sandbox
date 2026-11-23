@@ -736,9 +736,15 @@ def _build_execution_receipt(
     memory_peak_bytes: int | None = None,
     truncated: bool = False,
     error: str | None = None,
+    output: str | None = None,
 ) -> dict[str, Any]:
-    """Build structured receipt metadata for execute_python responses."""
+    """Build the structured part of an execute_python response.
+
+    It carries the output as well as the receipt: a client that shows the structured
+    content in place of the text content would otherwise see a success with no result.
+    """
     return {
+        "output": output,
         "environment": environment,
         "repl_backend": type(repl).__name__,
         "trust_level": trust_level,
@@ -809,6 +815,7 @@ async def _execute_python(
                 cpu_time_ms=result.cpu_time_ms,
                 memory_peak_bytes=result.memory_peak_bytes,
                 truncated=result.truncated,
+                output=output,
             ),
         )
     else:

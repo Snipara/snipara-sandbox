@@ -59,6 +59,8 @@ class TestExecutePython:
         assert result.structuredContent["environment"] == "sandbox"
         assert result.structuredContent["session_id"] == "default"
         assert result.structuredContent["success"] is True
+        # The output is in the structured content too: some clients show only that part.
+        assert result.structuredContent["output"] == result.content[0].text
 
     @pytest.mark.asyncio
     async def test_execute_python_with_result(self, repl):

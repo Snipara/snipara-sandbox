@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## 3.5.0 - 2026-11-23
+
+- `execute_python` over MCP returns its output in the structured content too
+  (`structuredContent.output`). It was only in the text content, so a client that shows
+  the structured content in place of the text saw `success: true` and no result.
+- The managed toolchain check accepts the generation with Companion 9.x: Companion 9.x and
+  Sandbox 3.5 or a later 3.x. Companion 8.x bundles are refused as
+  `toolchain_version_incompatible`; reinstall with the current create-snipara.
+
 ## 3.4.0 - 2026-11-22
 
 - The managed toolchain no longer needs Orchestrator. The accepted generation is Companion

@@ -158,9 +158,9 @@ def load_managed_toolchain(
         # Orchestrator is retired: a bundle may still declare it, and it is then checked like
         # the others, but it is never required and never run.
         for name, major, minimum_minor, required in (
-            ("companion", 8, 0, True),
+            ("companion", 9, 0, True),
             ("orchestrator", 2, 1, False),
-            ("sandbox", 3, 4, True),
+            ("sandbox", 3, 5, True),
         ):
             item = declared.get(name)
             if item is None and not required:

@@ -416,14 +416,11 @@ wheels = [
 
 [[package]]
 name = "click"
-version = "8.3.1"
+version = "8.5.1"
 source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3d/fa/656b739db8587d7b5dfa22e22ed02566950fbfbcdc20311993483657a5c0/click-8.3.1.tar.gz", hash = "sha256:12ff4785d337a1bb490bb7e9c2b1ee5da3112e94a8622f26a6c77f5d2fc6842a", size = 295065 }
+sdist = { url = "https://files.pythonhosted.org/packages/45/37/edbf1b0707709013c0cf2e8317e03d97ed29bf4cac709fe328904ae92a38/click-8.5.1.tar.gz", hash = "sha256:9bbfada76703fd1d784b83eea012e3e8c6a001a876543ef104fa56aaaeb072b4", size = 399151 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/98/78/01c019cdb5d6498122777c1a43056ebb3ebfeef2076d9d026bfe15583b2b/click-8.3.1-py3-none-any.whl", hash = "sha256:981153a64e25f12d547d3426c367a4857371575ee7ad18df2a6183ab0545b2a6", size = 108274 },
+    { url = "https://files.pythonhosted.org/packages/31/7d/164b7ffc8624fe9efb4221bf9af485d5c1e41b9ae118045d2b6dc5457d8b/click-8.5.1-py3-none-any.whl", hash = "sha256:8bb5376d2006950386f8c6427613334a2acadc5f559cb80e638d00b4df957e37", size = 126163 },
 ]
 
 [[package]]
@@ -3036,20 +3033,23 @@ wheels = [
 
 [[package]]
 name = "snipara-mcp"
-version = "1.5.0"
+version = "5.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "click" },
     { name = "httpx" },
+    { name = "jsonschema" },
     { name = "mcp" },
+    { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0b/80/b1de0779170370ca2815b0e027ec35603f2b772799c6b5cf60c5da7f966e/snipara_mcp-1.5.0.tar.gz", hash = "sha256:a32ad80ecf89c5b4fa5e80df70c70aa817e611184ae873b0edf57c6b271faa34", size = 19358 }
+sdist = { url = "https://files.pythonhosted.org/packages/bc/23/f96e2665159ce23b9e4148d7252eb812a8957a480042e47ea119113c1a27/snipara_mcp-5.0.0.tar.gz", hash = "sha256:fd0c9d725bc1866aaae9d2bfc764a860e0bbf3dc0851dddf84720e3df4f8d717", size = 115905 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/60/15/395b5413ef25411d92e4b2bb2f77e799da61238dc8ad4c31496cb7cbf70b/snipara_mcp-1.5.0-py3-none-any.whl", hash = "sha256:67d2dc4ecc3f5ab60acbb4b46ba4aa6227f424bacbabe2a3e680469f3a856ef2", size = 22035 },
+    { url = "https://files.pythonhosted.org/packages/71/43/07536b6a1027d201060b6888331ebffa252d2bde878238f7f07b7031cab3/snipara_mcp-5.0.0-py3-none-any.whl", hash = "sha256:32f3b316d0fc1c772398724bd1c91dfd4af7dfb4f4b2010b39f000ec215e4937", size = 101058 },
 ]
 
 [[package]]
 name = "snipara-sandbox"
-version = "3.5.2"
+version = "3.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
@@ -3147,7 +3147,7 @@ requires-dist = [
     { name = "restrictedpython", specifier = ">=7.1" },
     { name = "rich", specifier = ">=13.7.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.2.0" },
-    { name = "snipara-mcp", marker = "extra == 'snipara'", specifier = ">=1.3.0" },
+    { name = "snipara-mcp", marker = "extra == 'snipara'", specifier = ">=5.0.0" },
     { name = "snipara-sandbox", extras = ["validation", "wasm", "snipara", "mcp", "inference", "visualizer", "dev"], marker = "extra == 'all'" },
     { name = "streamlit", marker = "extra == 'dev'", specifier = ">=1.30.0" },
     { name = "streamlit", marker = "extra == 'visualizer'", specifier = ">=1.30.0" },

@@ -25,7 +25,7 @@ def make_bundle(tmp_path, names=("companion", "orchestrator", "sandbox")):
     binaries = root / "bin"
     binaries.mkdir(mode=0o700)
     components = {}
-    versions = {"companion": "9.0.0", "orchestrator": "2.1.0", "sandbox": "3.5.2"}
+    versions = {"companion": "9.0.0", "orchestrator": "2.1.0", "sandbox": "3.6.0"}
     for name in names:
         version = versions[name]
         command = binaries / ("snipara-" + name)
@@ -63,7 +63,7 @@ def load(bundle):
     return managed.load_managed_toolchain(
         active,
         runtime_command=Path(manifest["components"]["sandbox"]["command"]),
-        runtime_version="3.5.2",
+        runtime_version="3.6.0",
     )
 
 
@@ -157,7 +157,7 @@ def test_stale_sdk_identity_requires_reconnection(bundle):
     _, root, manifest, _, active = bundle
     with pytest.raises(managed.ManagedToolchainError) as failure:
         managed.load_managed_toolchain(
-            active, runtime_command=root / "missing-sdk", runtime_version="3.5.2"
+            active, runtime_command=root / "missing-sdk", runtime_version="3.6.0"
         )
     assert failure.value.code == "toolchain_reconnect_required"
     with pytest.raises(managed.ManagedToolchainError) as failure:

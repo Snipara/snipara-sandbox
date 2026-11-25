@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 3.6.0 - 2026-11-25
 
 - The MCP server moves to version 2 of the MCP Python SDK (`mcp>=2.3.0,<3`). It answers MCP
   2026-07-28 clients as well as the handshake versions up to 2025-11-25. An environment that
@@ -11,6 +11,7 @@ All notable changes to this project are documented in this file.
   with an error the model can read; the SDK no longer does either. The check adds
   `jsonschema` to the `[mcp]` extra.
 - The server reports the Sandbox version. It reported the version of the MCP SDK.
+- The `[snipara]` extra needs `snipara-mcp>=5.0.0`, the first version on `mcp` 2.
 
 ## 3.5.2 - 2026-11-23
 

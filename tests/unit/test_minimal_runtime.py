@@ -116,7 +116,7 @@ def test_mcp_provider_request_does_not_start_or_load_config_without_extra(tmp_pa
         rlm.core.config.load_config = forbidden_config
         agents = AgentManager()
         response = asyncio.run(_agent_run(agents, SessionManager(), {'task': 'synthetic'}))
-        assert response.isError is True
+        assert response.is_error is True
         assert 'snipara-sandbox[inference]' in response.content[0].text
         assert not agents.list_runs()
         assert not FORBIDDEN.intersection(sys.modules)

@@ -210,8 +210,8 @@ async def test_managed_omission_and_no_reuse_use_sdk_inspection_lot_never_raw(bu
         result = await handle(
             "validation_run", {"request": request.model_dump(), "no_reuse": True}, base
         )
-    assert result.isError
-    assert result.structuredContent["coordination_mode"] == "coordinated"
+    assert result.is_error
+    assert result.structured_content["coordination_mode"] == "coordinated"
     assert len(calls) == 1 and calls[0]["scope"] == expected and calls[0]["no_reuse"] is True
     assert calls[0]["root"] == base
 
@@ -232,7 +232,7 @@ async def test_invalid_managed_selection_never_uses_a_raw_request(bundle):
             {"request": {"workspace": str(base), "image": "prepared", "argv": ["python", "-V"]}},
             base,
         )
-    assert result.isError and result.structuredContent["execution_authorized_by_gate"] is False
+    assert result.is_error and result.structured_content["execution_authorized_by_gate"] is False
     raw.assert_not_called()
     coordinate.assert_not_called()
 

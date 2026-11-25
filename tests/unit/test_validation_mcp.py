@@ -10,7 +10,7 @@ def test_public_validation_tools_expose_contract_without_account():
     tools = {tool.name: tool for tool in validation_tools()}
     assert len(tools) == 8
     assert (
-        tools["validation_run"].inputSchema["properties"]["request"]["additionalProperties"]
+        tools["validation_run"].input_schema["properties"]["request"]["additionalProperties"]
         is False
     )
 
@@ -18,7 +18,7 @@ def test_public_validation_tools_expose_contract_without_account():
 @pytest.mark.parametrize("name", ["validation_diagnose", "validation_run", "validation_verify"])
 def test_complete_mcp_schema_resolves_nested_model_definitions(name, tmp_path):
     tool = next(tool for tool in validation_tools() if tool.name == name)
-    schema = tool.inputSchema
+    schema = tool.input_schema
     Draft202012Validator.check_schema(schema)
     validator = Draft202012Validator(schema)
     request = {"workspace": str(tmp_path), "image": "prepared", "argv": ["python", "-V"]}
@@ -54,7 +54,7 @@ async def test_mcp_rejects_other_workspace_before_execution(tmp_path):
             },
             root,
         )
-    assert result.isError
+    assert result.is_error
     execute.assert_not_called()
 
 
@@ -89,7 +89,7 @@ async def test_mcp_worker_receives_pinned_source_identity(tmp_path):
             },
             root,
         )
-    assert result.structuredContent["files"] == ["allowed"]
+    assert result.structured_content["files"] == ["allowed"]
 
 
 @pytest.mark.asyncio
@@ -109,7 +109,7 @@ async def test_mcp_cannot_re_root_excluded_subtrees(tmp_path, subtree):
             },
             tmp_path,
         )
-    assert result.isError
+    assert result.is_error
     execute.assert_not_called()
 
 
@@ -185,8 +185,8 @@ async def test_scoped_mcp_uses_optional_coordinator_with_pinned_workspace_never_
             },
             tmp_path,
         )
-    assert result.isError and called == [("workflow/lot", True)]
-    assert result.structuredContent["coordination_mode"] == "coordinated"
+    assert result.is_error and called == [("workflow/lot", True)]
+    assert result.structured_content["coordination_mode"] == "coordinated"
 
 
 @pytest.mark.asyncio
@@ -217,7 +217,7 @@ async def test_invalid_coordination_arguments_fail_before_dispatch(tmp_path, ext
             },
             tmp_path,
         )
-    assert result.isError
+    assert result.is_error
     coordinate.assert_not_called()
     raw.assert_not_called()
 
@@ -226,8 +226,8 @@ async def test_invalid_coordination_arguments_fail_before_dispatch(tmp_path, ext
 async def test_profile_metadata_needs_no_workspace_or_docker(tmp_path):
     with patch("rlm.validation.mcp.pin_directory_bounded", side_effect=AssertionError):
         result = await handle("validation_profiles", {}, tmp_path / "does-not-exist")
-    assert not result.isError
-    assert result.structuredContent["schema_version"] == "snipara.validation.profiles.v1"
+    assert not result.is_error
+    assert result.structured_content["schema_version"] == "snipara.validation.profiles.v1"
 
 
 @pytest.mark.asyncio
@@ -242,7 +242,7 @@ async def test_run_coordination_marker_is_response_only_preserving_receipt(tmp_p
     target = "coordinated_run" if scoped else "run"
     with patch("rlm.validation.mcp." + target, return_value=receipt):
         result = await handle("validation_run", arguments, tmp_path)
-    assert result.structuredContent["coordination_mode"] == (
+    assert result.structured_content["coordination_mode"] == (
         "coordinated" if scoped else "legacy_raw"
     )
     assert receipt == {"status": "passed", "run_id": "a" * 32}
@@ -264,8 +264,8 @@ async def test_verifier_response_has_no_execution_mode_sideband(tmp_path):
             },
             tmp_path,
         )
-    assert result.structuredContent == proof
-    assert "coordination_mode" not in result.structuredContent
+    assert result.structured_content == proof
+    assert "coordination_mode" not in result.structured_content
 
 
 def _receipt():
@@ -311,7 +311,7 @@ async def test_scoped_mcp_runs_native_coordination_and_flags_unverified_pass(tmp
             tmp_path,
         )
     launch.assert_called_once()
-    value = result.structuredContent
+    value = result.structured_content
     assert value["coordination_mode"] == "coordinated" and value["status"] == "passed"
     assert value["work_reuse"]["state"] == ("executed" if valid else "needs_review")
-    assert result.isError is (not valid)
+    assert result.is_error is (not valid)

@@ -25,7 +25,7 @@ def make_bundle(tmp_path, names=("companion", "orchestrator", "sandbox")):
     binaries = root / "bin"
     binaries.mkdir(mode=0o700)
     components = {}
-    versions = {"companion": "9.0.0", "orchestrator": "2.1.0", "sandbox": "3.5.2"}
+    versions = {"companion": "9.0.0", "orchestrator": "2.1.0", "sandbox": "3.6.0"}
     for name in names:
         version = versions[name]
         command = binaries / ("snipara-" + name)
@@ -63,7 +63,7 @@ def load(bundle):
     return managed.load_managed_toolchain(
         active,
         runtime_command=Path(manifest["components"]["sandbox"]["command"]),
-        runtime_version="3.5.2",
+        runtime_version="3.6.0",
     )
 
 
@@ -157,7 +157,7 @@ def test_stale_sdk_identity_requires_reconnection(bundle):
     _, root, manifest, _, active = bundle
     with pytest.raises(managed.ManagedToolchainError) as failure:
         managed.load_managed_toolchain(
-            active, runtime_command=root / "missing-sdk", runtime_version="3.5.2"
+            active, runtime_command=root / "missing-sdk", runtime_version="3.6.0"
         )
     assert failure.value.code == "toolchain_reconnect_required"
     with pytest.raises(managed.ManagedToolchainError) as failure:
@@ -210,8 +210,8 @@ async def test_managed_omission_and_no_reuse_use_sdk_inspection_lot_never_raw(bu
         result = await handle(
             "validation_run", {"request": request.model_dump(), "no_reuse": True}, base
         )
-    assert result.isError
-    assert result.structuredContent["coordination_mode"] == "coordinated"
+    assert result.is_error
+    assert result.structured_content["coordination_mode"] == "coordinated"
     assert len(calls) == 1 and calls[0]["scope"] == expected and calls[0]["no_reuse"] is True
     assert calls[0]["root"] == base
 
@@ -232,7 +232,7 @@ async def test_invalid_managed_selection_never_uses_a_raw_request(bundle):
             {"request": {"workspace": str(base), "image": "prepared", "argv": ["python", "-V"]}},
             base,
         )
-    assert result.isError and result.structuredContent["execution_authorized_by_gate"] is False
+    assert result.is_error and result.structured_content["execution_authorized_by_gate"] is False
     raw.assert_not_called()
     coordinate.assert_not_called()
 

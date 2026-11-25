@@ -92,7 +92,7 @@ def validation_tools() -> list[Tool]:
                     else ""
                 )
                 + name,
-                inputSchema={
+                input_schema={
                     **({"$defs": definitions} if definitions else {}),
                     "type": "object",
                     "properties": properties,
@@ -113,14 +113,14 @@ async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolRe
                 raise ValueError("validation_profiles takes no arguments")
             value = validation_profiles()
             return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(value))], structuredContent=value
+                content=[TextContent(type="text", text=json.dumps(value))], structured_content=value
             )
         if name == "validation_inspect":
             if set(arguments) != {"request"}:
                 raise ValueError("validation_inspect requires only request")
             value = inspect_request(ValidationRequest.model_validate(arguments["request"]))
             return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(value))], structuredContent=value
+                content=[TextContent(type="text", text=json.dumps(value))], structured_content=value
             )
         if name not in NAMES:
             raise ValueError("Unknown validation tool")
@@ -251,8 +251,8 @@ async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolRe
         )
         return CallToolResult(
             content=[TextContent(type="text", text=json.dumps(value))],
-            structuredContent=value,
-            isError=error,
+            structured_content=value,
+            is_error=error,
         )
     except ManagedToolchainError as error:
         value = {
@@ -264,12 +264,12 @@ async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolRe
         }
         return CallToolResult(
             content=[TextContent(type="text", text=json.dumps(value))],
-            structuredContent=value,
-            isError=True,
+            structured_content=value,
+            is_error=True,
         )
     except Exception as error:
         return CallToolResult(
-            content=[TextContent(type="text", text=str(error)[:2000])], isError=True
+            content=[TextContent(type="text", text=str(error)[:2000])], is_error=True
         )
 
     finally:

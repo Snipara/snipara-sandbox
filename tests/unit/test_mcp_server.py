@@ -5,8 +5,10 @@ import json
 import time
 
 import pytest
+from mcp import Client
 from mcp.server import Server
 
+from rlm import __version__
 from rlm.mcp.server import (
     AgentManager,
     Session,
@@ -52,22 +54,22 @@ class TestExecutePython:
         """Should execute simple code and return output."""
         result = await _execute_python(repl, {"code": "print('hello')"})
 
-        assert not result.isError
+        assert not result.is_error
         assert len(result.content) == 1
         assert "hello" in result.content[0].text
-        assert result.structuredContent is not None
-        assert result.structuredContent["environment"] == "sandbox"
-        assert result.structuredContent["session_id"] == "default"
-        assert result.structuredContent["success"] is True
+        assert result.structured_content is not None
+        assert result.structured_content["environment"] == "sandbox"
+        assert result.structured_content["session_id"] == "default"
+        assert result.structured_content["success"] is True
         # The output is in the structured content too: some clients show only that part.
-        assert result.structuredContent["output"] == result.content[0].text
+        assert result.structured_content["output"] == result.content[0].text
 
     @pytest.mark.asyncio
     async def test_execute_python_with_result(self, repl):
         """Should capture result variable."""
         result = await _execute_python(repl, {"code": "result = 42"})
 
-        assert not result.isError
+        assert not result.is_error
         assert "42" in result.content[0].text
 
     @pytest.mark.asyncio
@@ -75,17 +77,17 @@ class TestExecutePython:
         """Should return error for empty code."""
         result = await _execute_python(repl, {"code": ""})
 
-        assert result.isError
+        assert result.is_error
         assert "No code provided" in result.content[0].text
-        assert result.structuredContent is not None
-        assert result.structuredContent["error"] == "No code provided"
+        assert result.structured_content is not None
+        assert result.structured_content["error"] == "No code provided"
 
     @pytest.mark.asyncio
     async def test_execute_python_empty_code_whitespace(self, repl):
         """Should return error for whitespace-only code."""
         result = await _execute_python(repl, {"code": "   \n  "})
 
-        assert result.isError
+        assert result.is_error
         assert "No code provided" in result.content[0].text
 
     @pytest.mark.asyncio
@@ -93,7 +95,7 @@ class TestExecutePython:
         """Should return error for syntax errors."""
         result = await _execute_python(repl, {"code": "def foo(:"})
 
-        assert result.isError
+        assert result.is_error
         assert "Error" in result.content[0].text
 
     @pytest.mark.asyncio
@@ -103,7 +105,7 @@ class TestExecutePython:
         result = await _execute_python(repl, {"code": "result = 1", "timeout": 120})
 
         # Should still work, timeout was capped internally
-        assert not result.isError
+        assert not result.is_error
 
     @pytest.mark.asyncio
     async def test_execute_python_context_persists(self, repl):
@@ -111,7 +113,7 @@ class TestExecutePython:
         await _execute_python(repl, {"code": "x = 10"})
         result = await _execute_python(repl, {"code": "result = x * 2"})
 
-        assert not result.isError
+        assert not result.is_error
         assert "20" in result.content[0].text
 
     @pytest.mark.asyncio
@@ -119,7 +121,7 @@ class TestExecutePython:
         """Should handle code with no output."""
         result = await _execute_python(repl, {"code": "x = 5"})
 
-        assert not result.isError
+        assert not result.is_error
         assert "no output" in result.content[0].text.lower()
 
     @pytest.mark.asyncio
@@ -132,11 +134,11 @@ class TestExecutePython:
             session_id="bench-1",
         )
 
-        assert not result.isError
-        assert result.structuredContent is not None
-        assert result.structuredContent["environment"] == "docker"
-        assert result.structuredContent["profile"] == "quick"
-        assert result.structuredContent["session_id"] == "bench-1"
+        assert not result.is_error
+        assert result.structured_content is not None
+        assert result.structured_content["environment"] == "docker"
+        assert result.structured_content["profile"] == "quick"
+        assert result.structured_content["session_id"] == "bench-1"
 
 
 class TestGetReplContext:
@@ -152,7 +154,7 @@ class TestGetReplContext:
         """Should return 'empty' message when context is empty."""
         result = await _get_repl_context(repl)
 
-        assert not result.isError
+        assert not result.is_error
         assert "empty" in result.content[0].text.lower()
 
     @pytest.mark.asyncio
@@ -161,7 +163,7 @@ class TestGetReplContext:
         repl.set_context("test_var", 42)
         result = await _get_repl_context(repl)
 
-        assert not result.isError
+        assert not result.is_error
         assert "test_var" in result.content[0].text
         assert "42" in result.content[0].text
 
@@ -171,7 +173,7 @@ class TestGetReplContext:
         repl.set_context("data", {"key": "value"})
         result = await _get_repl_context(repl)
 
-        assert not result.isError
+        assert not result.is_error
         assert "data" in result.content[0].text
         assert "key" in result.content[0].text
 
@@ -181,7 +183,7 @@ class TestGetReplContext:
         repl.set_context("items", [1, 2, 3])
         result = await _get_repl_context(repl)
 
-        assert not result.isError
+        assert not result.is_error
         assert "items" in result.content[0].text
 
 
@@ -198,7 +200,7 @@ class TestSetReplContext:
         """Should parse JSON values correctly."""
         result = await _set_repl_context(repl, {"key": "data", "value": '{"a": 1}'})
 
-        assert not result.isError
+        assert not result.is_error
         context = repl.get_context()
         assert context.get("data") == {"a": 1}
 
@@ -207,7 +209,7 @@ class TestSetReplContext:
         """Should store non-JSON as string."""
         result = await _set_repl_context(repl, {"key": "name", "value": "hello world"})
 
-        assert not result.isError
+        assert not result.is_error
         context = repl.get_context()
         assert context.get("name") == "hello world"
 
@@ -216,7 +218,7 @@ class TestSetReplContext:
         """Should return error for empty key."""
         result = await _set_repl_context(repl, {"key": "", "value": "test"})
 
-        assert result.isError
+        assert result.is_error
         assert "No key provided" in result.content[0].text
 
     @pytest.mark.asyncio
@@ -224,7 +226,7 @@ class TestSetReplContext:
         """Should parse JSON arrays correctly."""
         result = await _set_repl_context(repl, {"key": "arr", "value": "[1, 2, 3]"})
 
-        assert not result.isError
+        assert not result.is_error
         context = repl.get_context()
         assert context.get("arr") == [1, 2, 3]
 
@@ -233,7 +235,7 @@ class TestSetReplContext:
         """Should parse JSON numbers correctly."""
         result = await _set_repl_context(repl, {"key": "num", "value": "42.5"})
 
-        assert not result.isError
+        assert not result.is_error
         context = repl.get_context()
         assert context.get("num") == 42.5
 
@@ -254,7 +256,7 @@ class TestClearReplContext:
 
         result = await _clear_repl_context(repl)
 
-        assert not result.isError
+        assert not result.is_error
         assert "cleared" in result.content[0].text.lower()
         assert repl.get_context() == {}
 
@@ -263,51 +265,54 @@ class TestClearReplContext:
         """Should succeed even if context is already empty."""
         result = await _clear_repl_context(repl)
 
-        assert not result.isError
+        assert not result.is_error
         assert "cleared" in result.content[0].text.lower()
 
 
-class TestServerCallTool:
-    """Tests for the server's call_tool handler."""
-
-    @pytest.fixture
-    def server(self):
-        """Create a server instance for testing."""
-        return create_server()
+@pytest.mark.parametrize(("mode", "version"), [("legacy", "2025-11-25"), ("auto", "2026-07-28")])
+class TestServedTools:
+    """The tools as a client reaches them, with the handshake and with MCP 2026-07-28."""
 
     @pytest.mark.asyncio
-    async def test_call_tool_unknown_tool(self):
-        """Should return error for unknown tool name."""
-        server = create_server()
+    async def test_lists_and_calls_tools(self, mode, version):
+        async with Client(create_server(), mode=mode) as client:
+            assert client.protocol_version == version
+            assert client.server_info.version == __version__
+            names = {tool.name for tool in (await client.list_tools()).tools}
+            result = await client.call_tool("execute_python", {"code": "result = 6 * 7"})
 
-        # Get the call_tool handler from the server's request handlers
-        # We need to test the handler by invoking the internal function
-        # Since call_tool is a decorated function, we access it via the server internals
+        assert {"execute_python", "validation_run", "snipara_agent_run"} <= names
+        assert not result.is_error
+        assert result.structured_content["output"] == result.content[0].text
+        assert "42" in result.content[0].text
 
-        from rlm.repl.local import LocalREPL
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("name", "arguments", "expected"),
+        [
+            ("execute_python", {"code": 42}, "Input validation error: 42 is not of type 'string'"),
+            ("execute_python", None, "Input validation error: 'code' is a required property"),
+            ("unknown", {}, "Unknown tool: unknown"),
+        ],
+    )
+    async def test_refuses_invalid_calls(self, mode, version, name, arguments, expected):
+        async with Client(create_server(), mode=mode) as client:
+            result = await client.call_tool(name, arguments)
 
-        # Create a test repl and test the logic directly
-        LocalREPL(timeout=5)
+        assert result.is_error
+        assert result.content[0].text == expected
 
-        # We can't easily test the decorated function, but we can test the module-level
-        # behavior by importing and testing the create_server mechanism
-        # The key is that the server should handle unknown tools gracefully
+    @pytest.mark.asyncio
+    async def test_reports_a_tool_failure_to_the_model(self, mode, version, monkeypatch):
+        def fail(*args, **kwargs):
+            raise RuntimeError("no session left")
 
-        # Test that unknown tool returns an error via _call_tool behavior
-        # Since we can't easily invoke the decorated function, let's verify
-        # that the server is created correctly and has the tool handlers
-        assert server.name == "SniparaSandbox"
+        monkeypatch.setattr(SessionManager, "get_or_create", fail)
+        async with Client(create_server(), mode=mode) as client:
+            result = await client.call_tool("get_repl_context", {})
 
-
-class TestListTools:
-    """Tests for the list_tools handler."""
-
-    def test_server_has_tools_registered(self):
-        """Server should have tools registered."""
-        server = create_server()
-
-        # Verify server is created correctly
-        assert server.name == "SniparaSandbox"
+        assert result.is_error
+        assert result.content[0].text == "no session left"
 
 
 class TestExecutePythonEdgeCases:
@@ -336,17 +341,17 @@ class TestExecutePythonEdgeCases:
         with patch.object(repl, "execute", new_callable=AsyncMock, return_value=mock_result):
             result = await _execute_python(repl, {"code": "print('x' * 100000)"})
 
-            assert not result.isError
+            assert not result.is_error
             assert "truncated" in result.content[0].text.lower()
-            assert result.structuredContent is not None
-            assert result.structuredContent["truncated"] is True
+            assert result.structured_content is not None
+            assert result.structured_content["truncated"] is True
 
     @pytest.mark.asyncio
     async def test_execute_python_with_missing_code_key(self, repl):
         """Should handle missing code key."""
         result = await _execute_python(repl, {})
 
-        assert result.isError
+        assert result.is_error
         assert "No code provided" in result.content[0].text
 
 
@@ -370,7 +375,7 @@ class TestGetReplContextEdgeCases:
         repl.set_context("custom", CustomObj())
         result = await _get_repl_context(repl)
 
-        assert not result.isError
+        assert not result.is_error
         assert "custom" in result.content[0].text
         assert "CustomObj" in result.content[0].text
 
@@ -383,7 +388,7 @@ class TestGetReplContextEdgeCases:
 
         result = await _get_repl_context(repl)
 
-        assert not result.isError
+        assert not result.is_error
         text = result.content[0].text
         assert "a" in text
         assert "b" in text
@@ -403,7 +408,7 @@ class TestSetReplContextEdgeCases:
         """Should handle missing key in arguments."""
         result = await _set_repl_context(repl, {"value": "test"})
 
-        assert result.isError
+        assert result.is_error
         assert "No key provided" in result.content[0].text
 
     @pytest.mark.asyncio
@@ -411,7 +416,7 @@ class TestSetReplContextEdgeCases:
         """Should parse JSON boolean correctly."""
         result = await _set_repl_context(repl, {"key": "flag", "value": "true"})
 
-        assert not result.isError
+        assert not result.is_error
         context = repl.get_context()
         assert context.get("flag") is True
 
@@ -420,7 +425,7 @@ class TestSetReplContextEdgeCases:
         """Should parse JSON null correctly."""
         result = await _set_repl_context(repl, {"key": "nothing", "value": "null"})
 
-        assert not result.isError
+        assert not result.is_error
         context = repl.get_context()
         assert context.get("nothing") is None
 
@@ -442,7 +447,7 @@ class TestSetReplContextEdgeCases:
             RejectingRepl(), {"key": "bad", "value": '{"nested": true}'}
         )
 
-        assert result.isError
+        assert result.is_error
         assert "JSON-serializable" in result.content[0].text
 
 
@@ -459,7 +464,7 @@ class TestExecutePythonErrors:
         """Should handle runtime errors."""
         result = await _execute_python(repl, {"code": "1/0"})
 
-        assert result.isError
+        assert result.is_error
         assert "Error" in result.content[0].text
 
     @pytest.mark.asyncio
@@ -467,7 +472,7 @@ class TestExecutePythonErrors:
         """Should handle name errors."""
         result = await _execute_python(repl, {"code": "print(undefined_var)"})
 
-        assert result.isError
+        assert result.is_error
         assert "Error" in result.content[0].text
 
     @pytest.mark.asyncio
@@ -475,7 +480,7 @@ class TestExecutePythonErrors:
         """Should block dangerous imports."""
         result = await _execute_python(repl, {"code": "import os"})
 
-        assert result.isError
+        assert result.is_error
         # RestrictedPython blocks os import
 
     @pytest.mark.asyncio
@@ -483,7 +488,7 @@ class TestExecutePythonErrors:
         """Should allow safe imports."""
         result = await _execute_python(repl, {"code": "import json; result = json.dumps({'a': 1})"})
 
-        assert not result.isError
+        assert not result.is_error
         assert "a" in result.content[0].text
 
 
@@ -501,7 +506,7 @@ class TestGetReplContextFormatting:
         repl.set_context("config", {"level1": {"level2": "value"}})
         result = await _get_repl_context(repl)
 
-        assert not result.isError
+        assert not result.is_error
         assert "config" in result.content[0].text
         assert "level1" in result.content[0].text
 
@@ -511,7 +516,7 @@ class TestGetReplContextFormatting:
         repl.set_context("message", "Hello World")
         result = await _get_repl_context(repl)
 
-        assert not result.isError
+        assert not result.is_error
         assert "message" in result.content[0].text
         assert "Hello World" in result.content[0].text
 
@@ -732,7 +737,7 @@ class TestListSessions:
         mgr = SessionManager(ttl=60)
         mgr.get_or_create("work")
         result = await _list_sessions(mgr)
-        assert not result.isError
+        assert not result.is_error
         assert "work" in result.content[0].text
         assert "default" in result.content[0].text
 
@@ -745,28 +750,28 @@ class TestDestroySession:
         mgr = SessionManager(ttl=60)
         mgr.get_or_create("temp")
         result = await _destroy_session(mgr, {"session_id": "temp"})
-        assert not result.isError
+        assert not result.is_error
         assert "destroyed" in result.content[0].text
 
     @pytest.mark.asyncio
     async def test_destroy_default_resets(self):
         mgr = SessionManager(ttl=60)
         result = await _destroy_session(mgr, {"session_id": "default"})
-        assert not result.isError
+        assert not result.is_error
         assert "reset" in result.content[0].text.lower()
 
     @pytest.mark.asyncio
     async def test_destroy_nonexistent(self):
         mgr = SessionManager(ttl=60)
         result = await _destroy_session(mgr, {"session_id": "nope"})
-        assert result.isError
+        assert result.is_error
         assert "not found" in result.content[0].text
 
     @pytest.mark.asyncio
     async def test_destroy_no_session_id(self):
         mgr = SessionManager(ttl=60)
         result = await _destroy_session(mgr, {})
-        assert result.isError
+        assert result.is_error
         assert "No session_id" in result.content[0].text
 
 
@@ -809,7 +814,7 @@ class TestAgentRunHandler:
         await run.future
 
         captured = capsys.readouterr()
-        assert not result.isError
+        assert not result.is_error
         assert "noise" not in captured.out
         assert "load config noise" in captured.err
         assert "rlm init noise" in captured.err
@@ -824,14 +829,14 @@ class TestAgentStatusHandler:
     async def test_status_no_run_id(self):
         mgr = AgentManager()
         result = await _agent_status(mgr, {})
-        assert result.isError
+        assert result.is_error
         assert "No run_id" in result.content[0].text
 
     @pytest.mark.asyncio
     async def test_status_not_found(self):
         mgr = AgentManager()
         result = await _agent_status(mgr, {"run_id": "missing"})
-        assert result.isError
+        assert result.is_error
         assert "not found" in result.content[0].text
 
     @pytest.mark.asyncio
@@ -845,7 +850,7 @@ class TestAgentStatusHandler:
         await run.future  # Let it finish
 
         result = await _agent_status(mgr, {"run_id": "x"})
-        assert not result.isError
+        assert not result.is_error
         data = json.loads(result.content[0].text)
         assert data["status"] == "completed"
 
@@ -863,7 +868,7 @@ class TestAgentStatusHandler:
             pass
 
         result = await _agent_status(mgr, {"run_id": "e"})
-        assert not result.isError
+        assert not result.is_error
         data = json.loads(result.content[0].text)
         assert data["status"] == "error"
         assert "boom" in data["error"]
@@ -877,7 +882,7 @@ class TestAgentStatusHandler:
 
         mgr.start("s", "slow task", slow())
         result = await _agent_status(mgr, {"run_id": "s"})
-        assert not result.isError
+        assert not result.is_error
         data = json.loads(result.content[0].text)
         assert data["status"] == "running"
         # Cleanup
@@ -891,13 +896,13 @@ class TestAgentCancelHandler:
     async def test_cancel_no_run_id(self):
         mgr = AgentManager()
         result = await _agent_cancel(mgr, {})
-        assert result.isError
+        assert result.is_error
 
     @pytest.mark.asyncio
     async def test_cancel_not_found(self):
         mgr = AgentManager()
         result = await _agent_cancel(mgr, {"run_id": "missing"})
-        assert result.isError
+        assert result.is_error
         assert "not found" in result.content[0].text
 
     @pytest.mark.asyncio
@@ -909,5 +914,5 @@ class TestAgentCancelHandler:
 
         mgr.start("c", "cancel me", slow())
         result = await _agent_cancel(mgr, {"run_id": "c"})
-        assert not result.isError
+        assert not result.is_error
         assert "cancelled" in result.content[0].text

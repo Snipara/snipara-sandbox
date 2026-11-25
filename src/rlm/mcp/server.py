@@ -31,14 +31,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from mcp.server import Server
+import jsonschema
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 from mcp.types import (
+    CallToolRequestParams,
     CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
     TextContent,
     Tool,
 )
 
+from rlm import __version__
 from rlm.core.config import EXECUTION_PROFILES, RLMConfig, load_config
 from rlm.repl.base import BaseREPL
 from rlm.repl.docker import DockerREPL, build_workspace_image
@@ -368,8 +373,6 @@ async def _run_agent_stdio_safe(coro: Any) -> Any:
 
 def create_server() -> Server:
     """Create and configure the MCP server with code sandbox tools."""
-    server = Server("SniparaSandbox")
-
     # Load config to get trust level and execution environment defaults.
     try:
         config = load_config(project_env=False)
@@ -380,8 +383,7 @@ def create_server() -> Server:
     sessions = SessionManager(config=config)
     agents = AgentManager()
 
-    @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
-    async def list_tools() -> list[Tool]:
+    def list_tools() -> list[Tool]:
         """List available Snipara Sandbox tools."""
         return [
             *validation_tools(),
@@ -401,7 +403,7 @@ def create_server() -> Server:
                     "environment it uses. "
                     "Profiles: quick (5s), default (30s), analysis (120s), extended (300s)."
                 ),
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "code": {
@@ -440,7 +442,7 @@ def create_server() -> Server:
                     "Get the current REPL context. Returns all variables stored "
                     "in the persistent execution context from previous execute_python calls."
                 ),
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "session_id": {
@@ -456,7 +458,7 @@ def create_server() -> Server:
                     "Set a variable in the REPL context. The variable will persist "
                     "across multiple execute_python calls. Value should be JSON-encoded."
                 ),
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "key": {
@@ -478,7 +480,7 @@ def create_server() -> Server:
             Tool(
                 name="clear_repl_context",
                 description="Clear all variables from the REPL context and reset to clean state.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "session_id": {
@@ -494,7 +496,7 @@ def create_server() -> Server:
                     "List all active REPL sessions with metadata including "
                     "creation time, last access, and stored variable names."
                 ),
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {},
                 },
@@ -505,7 +507,7 @@ def create_server() -> Server:
                     "Destroy a REPL session and free its resources. "
                     "The 'default' session is reset instead of destroyed."
                 ),
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "session_id": {
@@ -524,7 +526,7 @@ def create_server() -> Server:
                     "Uses REPL for code execution, Snipara for context, and "
                     "sub-LLM calls for delegation. Returns a run_id to check status."
                 ),
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "task": {
@@ -556,7 +558,7 @@ def create_server() -> Server:
                     "Check the status of an autonomous agent run. "
                     "Returns running/completed/error status and the result if done."
                 ),
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "run_id": {
@@ -570,7 +572,7 @@ def create_server() -> Server:
             Tool(
                 name="snipara_agent_cancel",
                 description="Cancel a running autonomous agent.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "run_id": {
@@ -584,7 +586,7 @@ def create_server() -> Server:
             Tool(
                 name="rlm_agent_run",
                 description="Legacy alias for snipara_agent_run.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "task": {
@@ -613,7 +615,7 @@ def create_server() -> Server:
             Tool(
                 name="rlm_agent_status",
                 description="Legacy alias for snipara_agent_status.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "run_id": {
@@ -627,7 +629,7 @@ def create_server() -> Server:
             Tool(
                 name="rlm_agent_cancel",
                 description="Legacy alias for snipara_agent_cancel.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "run_id": {
@@ -640,7 +642,6 @@ def create_server() -> Server:
             ),
         ]
 
-    @server.call_tool()  # type: ignore[untyped-decorator]
     async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
         """Handle tool calls."""
         session_id = arguments.get("session_id")
@@ -654,7 +655,7 @@ def create_server() -> Server:
                             text="Repository validation requires a valid operator configuration with workspace access enabled.",
                         )
                     ],
-                    isError=True,
+                    is_error=True,
                 )
             return await handle_validation(name, arguments, VALIDATION_ROOT)
 
@@ -666,7 +667,7 @@ def create_server() -> Server:
             except (ImportError, ValueError) as e:
                 return CallToolResult(
                     content=[TextContent(type="text", text=f"Error: {e}")],
-                    isError=True,
+                    is_error=True,
                 )
             if session.repl is None or session.environment is None:
                 return CallToolResult(
@@ -676,7 +677,7 @@ def create_server() -> Server:
                             text="Error: Session failed to initialize execution environment",
                         )
                     ],
-                    isError=True,
+                    is_error=True,
                 )
             return await _execute_python(
                 session.repl,
@@ -716,10 +717,41 @@ def create_server() -> Server:
         else:
             return CallToolResult(
                 content=[TextContent(type="text", text=f"Unknown tool: {name}")],
-                isError=True,
+                is_error=True,
             )
 
-    return server
+    tools = list_tools()
+    input_schemas = {tool.name: tool.input_schema for tool in tools}
+
+    async def on_list_tools(
+        _ctx: ServerRequestContext, _params: PaginatedRequestParams | None
+    ) -> ListToolsResult:
+        return ListToolsResult(tools=tools)
+
+    async def on_call_tool(
+        _ctx: ServerRequestContext, params: CallToolRequestParams
+    ) -> CallToolResult:
+        """Report invalid arguments and tool failures to the model, which the SDK does not do."""
+        arguments = params.arguments or {}
+        try:
+            jsonschema.validate(arguments, input_schemas.get(params.name, {}))
+        except jsonschema.ValidationError as error:
+            return _error_result(f"Input validation error: {error.message}")
+        try:
+            return await call_tool(params.name, arguments)
+        except Exception as error:
+            return _error_result(str(error))
+
+    return Server(
+        "SniparaSandbox",
+        version=__version__,
+        on_list_tools=on_list_tools,
+        on_call_tool=on_call_tool,
+    )
+
+
+def _error_result(text: str) -> CallToolResult:
+    return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
 
 
 def _build_execution_receipt(
@@ -779,7 +811,7 @@ async def _execute_python(
     if not code.strip():
         return CallToolResult(
             content=[TextContent(type="text", text="Error: No code provided")],
-            structuredContent=_build_execution_receipt(
+            structured_content=_build_execution_receipt(
                 environment=environment,
                 repl=repl,
                 trust_level=trust_level,
@@ -789,7 +821,7 @@ async def _execute_python(
                 success=False,
                 error="No code provided",
             ),
-            isError=True,
+            is_error=True,
         )
 
     result = await repl.execute(code, timeout=timeout)
@@ -803,7 +835,7 @@ async def _execute_python(
             output = f"[local mode] {output}"
         return CallToolResult(
             content=[TextContent(type="text", text=output)],
-            structuredContent=_build_execution_receipt(
+            structured_content=_build_execution_receipt(
                 environment=environment,
                 repl=repl,
                 trust_level=trust_level,
@@ -822,7 +854,7 @@ async def _execute_python(
         error_prefix = "[local mode] " if environment == "local" else ""
         return CallToolResult(
             content=[TextContent(type="text", text=f"{error_prefix}Error: {result.error}")],
-            structuredContent=_build_execution_receipt(
+            structured_content=_build_execution_receipt(
                 environment=environment,
                 repl=repl,
                 trust_level=trust_level,
@@ -836,7 +868,7 @@ async def _execute_python(
                 truncated=result.truncated,
                 error=result.error,
             ),
-            isError=True,
+            is_error=True,
         )
 
 
@@ -871,7 +903,7 @@ async def _set_repl_context(repl: BaseREPL, arguments: dict[str, Any]) -> CallTo
     if not key:
         return CallToolResult(
             content=[TextContent(type="text", text="Error: No key provided")],
-            isError=True,
+            is_error=True,
         )
 
     try:
@@ -885,7 +917,7 @@ async def _set_repl_context(repl: BaseREPL, arguments: dict[str, Any]) -> CallTo
     except ValueError as e:
         return CallToolResult(
             content=[TextContent(type="text", text=f"Error: {e}")],
-            isError=True,
+            is_error=True,
         )
 
     return CallToolResult(
@@ -933,7 +965,7 @@ async def _destroy_session(sessions: SessionManager, arguments: dict[str, Any]) 
     if not session_id:
         return CallToolResult(
             content=[TextContent(type="text", text="Error: No session_id provided")],
-            isError=True,
+            is_error=True,
         )
 
     if sessions.destroy(session_id):
@@ -947,7 +979,7 @@ async def _destroy_session(sessions: SessionManager, arguments: dict[str, Any]) 
     else:
         return CallToolResult(
             content=[TextContent(type="text", text=f"Session '{session_id}' not found")],
-            isError=True,
+            is_error=True,
         )
 
 
@@ -959,7 +991,7 @@ async def _agent_run(
     if not task.strip():
         return CallToolResult(
             content=[TextContent(type="text", text="Error: No task provided")],
-            isError=True,
+            is_error=True,
         )
 
     try:
@@ -1018,12 +1050,12 @@ async def _agent_run(
                     text=f"Error: Agent dependencies not available: {e}",
                 )
             ],
-            isError=True,
+            is_error=True,
         )
     except Exception as e:
         return CallToolResult(
             content=[TextContent(type="text", text=f"Error starting agent: {e}")],
-            isError=True,
+            is_error=True,
         )
 
 
@@ -1033,14 +1065,14 @@ async def _agent_status(agents: AgentManager, arguments: dict[str, Any]) -> Call
     if not run_id:
         return CallToolResult(
             content=[TextContent(type="text", text="Error: No run_id provided")],
-            isError=True,
+            is_error=True,
         )
 
     run = agents.get(run_id)
     if run is None:
         return CallToolResult(
             content=[TextContent(type="text", text=f"Error: Run '{run_id}' not found")],
-            isError=True,
+            is_error=True,
         )
 
     if run.future.done():
@@ -1080,7 +1112,7 @@ async def _agent_cancel(agents: AgentManager, arguments: dict[str, Any]) -> Call
     if not run_id:
         return CallToolResult(
             content=[TextContent(type="text", text="Error: No run_id provided")],
-            isError=True,
+            is_error=True,
         )
 
     if agents.cancel(run_id):
@@ -1090,7 +1122,7 @@ async def _agent_cancel(agents: AgentManager, arguments: dict[str, Any]) -> Call
     else:
         return CallToolResult(
             content=[TextContent(type="text", text=f"Error: Run '{run_id}' not found")],
-            isError=True,
+            is_error=True,
         )
 
 

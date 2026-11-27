@@ -274,7 +274,12 @@ def capture_bounded(
                     time.sleep(0.02)
                 if process.returncode:
                     errors.seek(0)
-                    raise ValueError(errors.read(4096).decode("utf-8", errors="replace"))
+                    # The helper dies with a traceback; its last line is the reason.
+                    lines = (
+                        errors.read(65536).decode("utf-8", errors="replace").strip().splitlines()
+                    )
+                    reason = lines[-1] if lines else "snapshot helper failed"
+                    raise ValueError(reason.removeprefix("ValueError: ")[:2000])
                 if output.tell() > 8 * 1024 * 1024:
                     raise ValueError("snapshot manifest exceeds byte budget")
                 output.seek(0)

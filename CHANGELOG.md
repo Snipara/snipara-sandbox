@@ -9,6 +9,7 @@ All notable changes to this project are documented in this file.
   budget no longer has to be copied to a slimmer folder first. The entries are part of the
   request hash; a request without them keeps its previous hash.
 - The snapshot budget error names the path where the budget was passed and points to `exclude`.
+  A failed snapshot now reports its reason on one line instead of a Python traceback.
 - The MCP refusal of a workspace outside the server's root names that root and the
   `SNIPARA_SANDBOX_VALIDATION_WORKSPACE` setting.
 - A scoped run given an image tag says to use the image ID and how to read it. The reason

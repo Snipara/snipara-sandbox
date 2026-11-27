@@ -282,3 +282,19 @@ def test_request_exclude_is_validated_and_keeps_old_hashes():
     for bad in (["../x"], ["/abs"], ["."], ["a", "a"]):
         with pytest.raises(ValueError):
             ValidationRequest.model_validate({**base, "exclude": bad})
+
+
+def test_bounded_capture_reports_the_reason_not_a_traceback(tmp_path):
+    import time
+
+    import pytest
+
+    from rlm.validation import snapshot
+
+    (tmp_path / "link").symlink_to(tmp_path)
+    with pytest.raises(ValueError) as caught:
+        snapshot.capture_bounded(tmp_path, deadline=time.monotonic() + 30)
+    assert str(caught.value) == "source link or special file refused: link"
+    assert snapshot.capture_bounded(tmp_path, deadline=time.monotonic() + 30, exclude=["link"])[
+        "excluded"
+    ] == ["link"]

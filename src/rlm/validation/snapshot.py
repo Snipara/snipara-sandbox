@@ -110,10 +110,25 @@ def pin_directory(path: Path, *, root: Path | None = None) -> int:
         raise
 
 
+def _budget(reached: str, item: str) -> ValueError:
+    return ValueError(
+        f"snapshot exceeds {reached} at {item}; "
+        "list large or generated paths in the request's exclude field"
+    )
+
+
 def capture(
-    workspace: Path, destination: Path | None = None, *, workspace_fd: int | None = None
+    workspace: Path,
+    destination: Path | None = None,
+    *,
+    workspace_fd: int | None = None,
+    exclude: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Stream entries, preserve empty directories, and never follow source links."""
+    """Stream entries, preserve empty directories, and never follow source links.
+
+    ``exclude`` holds workspace-relative paths (files or directories) the request leaves out.
+    """
+    requested = frozenset(exclude)
     if workspace_fd is None and workspace.is_symlink():
         raise ValueError("workspace must not be a symlink")
     source_fd = os.dup(workspace_fd) if workspace_fd is not None else pin_directory(workspace)
@@ -139,7 +154,7 @@ def capture(
                 path_bytes += len(item.encode())
                 if entries > MAX_ENTRIES or path_bytes > MAX_PATH_BYTES:
                     raise ValueError("snapshot exceeds entry/path budget")
-                if excluded(entry.name):
+                if excluded(entry.name) or item in requested:
                     omissions.append(item)
                     continue
                 info = os.stat(entry.name, dir_fd=fd, follow_symlinks=False)
@@ -153,7 +168,12 @@ def capture(
                         os.close(child)
                 elif stat.S_ISREG(info.st_mode):
                     if len(files) >= MAX_FILES or info.st_size + total > MAX_BYTES:
-                        raise ValueError("snapshot exceeds file/byte budget")
+                        raise _budget(
+                            f"its {MAX_FILES} file budget"
+                            if len(files) >= MAX_FILES
+                            else f"its {MAX_BYTES // (1024 * 1024)} MB byte budget",
+                            item,
+                        )
                     with os.fdopen(
                         os.open(entry.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd),
                         "rb",
@@ -164,7 +184,7 @@ def capture(
                         data = source.read(MAX_BYTES - total + 1)
                     total += len(data)
                     if total > MAX_BYTES:
-                        raise ValueError("snapshot exceeds byte budget")
+                        raise _budget(f"its {MAX_BYTES // (1024 * 1024)} MB byte budget", item)
                     mode = 0o755 if held.st_mode & 0o111 else 0o644
                     files.append(
                         {
@@ -205,10 +225,11 @@ def capture_bounded(
     deadline: float,
     cancelled: Callable[[], bool] | None = None,
     workspace_fd: int | None = None,
+    exclude: tuple[str, ...] | list[str] = (),
 ) -> dict[str, Any]:
     """A disposable helper makes blocked source I/O cancellable by its parent."""
     fd = os.dup(workspace_fd) if workspace_fd is not None else -1
-    script = "import runpy,json,sys; from pathlib import Path; m=runpy.run_path(sys.argv[1]); m['_watch_owner'](int(sys.argv[5]),float(sys.argv[6])); value=m['capture'](Path(sys.argv[2]),Path(sys.argv[4]) if sys.argv[4] else None,workspace_fd=int(sys.argv[3]) if int(sys.argv[3]) >= 0 else None); json.dump(value,sys.stdout,sort_keys=True)"
+    script = "import runpy,json,sys; from pathlib import Path; m=runpy.run_path(sys.argv[1]); m['_watch_owner'](int(sys.argv[5]),float(sys.argv[6])); value=m['capture'](Path(sys.argv[2]),Path(sys.argv[4]) if sys.argv[4] else None,workspace_fd=int(sys.argv[3]) if int(sys.argv[3]) >= 0 else None,exclude=tuple(json.loads(sys.argv[7]))); json.dump(value,sys.stdout,sort_keys=True)"
     env = {
         name: value
         for name, value in os.environ.items()
@@ -233,6 +254,7 @@ def capture_bounded(
                     str(destination) if destination is not None else "",
                     str(lifeline_read),
                     str(deadline),
+                    json.dumps(sorted(exclude)),
                 ],
                 pass_fds=(
                     *((fd,) if fd >= 0 else ()),
@@ -252,7 +274,12 @@ def capture_bounded(
                     time.sleep(0.02)
                 if process.returncode:
                     errors.seek(0)
-                    raise ValueError(errors.read(4096).decode("utf-8", errors="replace"))
+                    # The helper dies with a traceback; its last line is the reason.
+                    lines = (
+                        errors.read(65536).decode("utf-8", errors="replace").strip().splitlines()
+                    )
+                    reason = lines[-1] if lines else "snapshot helper failed"
+                    raise ValueError(reason.removeprefix("ValueError: ")[:2000])
                 if output.tell() > 8 * 1024 * 1024:
                     raise ValueError("snapshot manifest exceeds byte budget")
                 output.seek(0)

@@ -282,6 +282,8 @@ def test_mutable_image_is_refused_before_any_state(lane, change):
         )
     launch.assert_not_called()
     assert result["reason_code"] == "scoped_contract_invalid"
+    assert "not a tag" in result["work_reuse"]["reason"]
+    assert "docker image inspect" in result["work_reuse"]["reason"]
     assert result["work_reuse"] == {
         "state": "needs_review",
         "key": None,

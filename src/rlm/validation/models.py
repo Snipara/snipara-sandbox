@@ -54,13 +54,25 @@ class ValidationRequest(BaseModel):
     disk_mb: int = Field(default=2048, ge=16, le=4096)
     artifacts: list[str] = Field(default_factory=list, max_length=32)
     requirements: ValidationRequirements = Field(default_factory=ValidationRequirements)
+    # Workspace-relative files or directories left out of the snapshot, on top of the fixed policy.
+    exclude: list[str] = Field(default_factory=list, max_length=64)
 
     def identity_payload(self) -> dict[str, object]:
         """Keep pre-capability v1 request/choice hashes valid for empty requirements."""
         payload = self.model_dump()
         if not any(payload["requirements"].values()):
             payload.pop("requirements")
+        if not payload["exclude"]:
+            payload.pop("exclude")  # requests written before this field keep their hash
         return payload
+
+    @field_validator("exclude")
+    @classmethod
+    def safe_exclude(cls, value: list[str]) -> list[str]:
+        paths = [safe_relative_path(item, allow_dot=False) for item in value]
+        if len(set(paths)) != len(paths):
+            raise ValueError("exclude entries must be distinct")
+        return sorted(paths)
 
     @field_validator("workspace")
     @classmethod

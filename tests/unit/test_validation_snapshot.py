@@ -235,3 +235,66 @@ def test_source_ancestor_symlink_is_never_resolved_into_authority(tmp_path):
     alias.symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError):
         capture_bounded(alias / "child", deadline=time.monotonic() + 2)
+
+
+def test_request_exclude_leaves_paths_out_and_reports_them(tmp_path):
+    from rlm.validation.snapshot import capture
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print(1)\n")
+    (tmp_path / "assets" / "big").mkdir(parents=True)
+    (tmp_path / "assets" / "big" / "blob.bin").write_bytes(b"x" * 1024)
+    (tmp_path / "setup.exe").write_bytes(b"y" * 1024)
+    full = capture(tmp_path)
+    slim = capture(tmp_path, exclude=("assets/big", "setup.exe"))
+    assert [item["path"] for item in slim["files"]] == ["src/main.py"]
+    assert slim["excluded"] == ["assets/big", "setup.exe"]
+    assert slim["sha256"] != full["sha256"] and slim["bytes"] == 9
+    # A name match elsewhere in the tree is not excluded: entries are whole relative paths.
+    (tmp_path / "src" / "setup.exe").write_bytes(b"z")
+    assert "src/setup.exe" in [
+        item["path"] for item in capture(tmp_path, exclude=("setup.exe",))["files"]
+    ]
+
+
+def test_byte_budget_error_names_the_path_and_the_exclude_field(tmp_path, monkeypatch):
+    import pytest
+
+    from rlm.validation import snapshot
+
+    monkeypatch.setattr(snapshot, "MAX_BYTES", 2 * 1024 * 1024)
+    (tmp_path / "video.bin").write_bytes(b"0" * (3 * 1024 * 1024))
+    with pytest.raises(ValueError, match=r"2 MB byte budget at video\.bin; .*exclude field"):
+        snapshot.capture(tmp_path)
+    assert snapshot.capture(tmp_path, exclude=("video.bin",))["files"] == []
+
+
+def test_request_exclude_is_validated_and_keeps_old_hashes():
+    import pytest
+
+    from rlm.validation.models import ValidationRequest
+
+    base = {"workspace": "/w", "argv": ["true"], "image": "sha256:" + "a" * 64}
+    plain = ValidationRequest.model_validate(base)
+    assert "exclude" not in plain.identity_payload()
+    slim = ValidationRequest.model_validate({**base, "exclude": ["b/c", "a"]})
+    assert slim.exclude == ["a", "b/c"] and slim.identity_payload()["exclude"] == ["a", "b/c"]
+    for bad in (["../x"], ["/abs"], ["."], ["a", "a"]):
+        with pytest.raises(ValueError):
+            ValidationRequest.model_validate({**base, "exclude": bad})
+
+
+def test_bounded_capture_reports_the_reason_not_a_traceback(tmp_path):
+    import time
+
+    import pytest
+
+    from rlm.validation import snapshot
+
+    (tmp_path / "link").symlink_to(tmp_path)
+    with pytest.raises(ValueError) as caught:
+        snapshot.capture_bounded(tmp_path, deadline=time.monotonic() + 30)
+    assert str(caught.value) == "source link or special file refused: link"
+    assert snapshot.capture_bounded(tmp_path, deadline=time.monotonic() + 30, exclude=["link"])[
+        "excluded"
+    ] == ["link"]

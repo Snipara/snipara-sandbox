@@ -728,6 +728,7 @@ def run(
                 Path(request.workspace),
                 snapshot,
                 deadline=deadline,
+                exclude=request.exclude,
                 cancelled=lambda: (
                     directory.exists("cancel-requested")
                     or (cancel_event is not None and cancel_event.is_set())
@@ -992,6 +993,7 @@ def _verify(
             Path(request.workspace),
             deadline=time.monotonic() + request.timeout_seconds,
             workspace_fd=workspace_fd,
+            exclude=request.exclude,
             cancelled=lambda: cancel_event is not None and cancel_event.is_set(),
         )["sha256"]
     ):

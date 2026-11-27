@@ -104,6 +104,13 @@ is checked before dispatch. Containers are non-root, network-off, capability-fre
 CPU, PID, tmpfs disk and output limits. Docker's daemon is trusted local
 infrastructure; this is not a qualification for hostile shared multi-tenancy.
 
+The snapshot holds at most 64 MB and 20,000 files. When a workspace carries more (media, bundled
+binaries, datasets), list the workspace-relative files or directories to leave out in the request's
+`exclude` field, for example `"exclude": ["frontend/public/assets", "tools/setup.exe"]`. Entries are
+whole relative paths, not patterns; they are reported under `snapshot.excluded` and are part of the
+request hash, so a run with different exclusions is never reused. A request without `exclude` keeps
+the hash it had before the field existed.
+
 The durable store must be outside the input tree or beneath its excluded
 `.snipara` directory. Protect it as local operator state. State access stays bound to directory
 descriptors, including when an ancestor is replaced during a run. Receipts identify exact

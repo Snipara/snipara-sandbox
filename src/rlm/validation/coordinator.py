@@ -302,7 +302,10 @@ def coordinated_run(
         if type(no_reuse) is not bool:
             raise ValueError("no_reuse must be a boolean")
         if not IMMUTABLE_IMAGE.fullmatch(request.image):
-            raise ValueError("Scoped validation requires an immutable sha256 image")
+            raise ValueError(
+                "Scoped validation requires an immutable sha256 image, not a tag. "
+                "Use the image ID printed by: docker image inspect <image> --format '{{.Id}}'"
+            )
         workspace = secure_path(canonical_system_path(Path(request.workspace)))
         store = secure_path(store)
         if root is not None:

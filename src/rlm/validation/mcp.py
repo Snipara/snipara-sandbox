@@ -154,7 +154,11 @@ async def handle(name: str, arguments: dict[str, Any], root: Path) -> CallToolRe
                 scope = managed_validation_scope(inspect_request(request)["request_sha256"])
             workspace = canonical_system_path(Path(request.workspace))
             if not workspace.is_relative_to(root):
-                raise ValueError("workspace is outside operator-configured MCP root")
+                raise ValueError(
+                    "workspace is outside operator-configured MCP root "
+                    f"({root}); start the server from a folder that contains the workspace, "
+                    "or set SNIPARA_SANDBOX_VALIDATION_WORKSPACE to one, then reconnect"
+                )
             if any(excluded(part) for part in workspace.relative_to(root).parts):
                 raise ValueError("workspace traverses an excluded source directory")
             acquisition = asyncio.create_task(

@@ -53,7 +53,7 @@ def test_scoped_node_packages_and_dotted_python_modules_are_supported():
 
 def test_empty_requirements_preserve_legacy_v1_receipt_and_choice_identity(tmp_path):
     req = request(tmp_path)
-    legacy = req.model_dump(exclude={"requirements"})
+    legacy = req.model_dump(exclude={"requirements", "exclude"})
     assert request_hash(req) == hashlib.sha256(canonical(legacy)).hexdigest()
     parts = [
         "snipara.validation.scope.v2",

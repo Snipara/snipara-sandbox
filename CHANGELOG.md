@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- A validation request can leave paths out of the snapshot: `exclude` lists workspace-relative
+  files or directories, on top of the fixed exclusions. A workspace over the 64 MB snapshot
+  budget no longer has to be copied to a slimmer folder first. The entries are part of the
+  request hash; a request without them keeps its previous hash.
+- The snapshot budget error names the path where the budget was passed and points to `exclude`.
+- The MCP refusal of a workspace outside the server's root names that root and the
+  `SNIPARA_SANDBOX_VALIDATION_WORKSPACE` setting.
+- A scoped run given an image tag says to use the image ID and how to read it. The reason
+  code (`scoped_contract_invalid`) is unchanged.
+
 ## 3.6.0 - 2026-11-25
 
 - The MCP server moves to version 2 of the MCP Python SDK (`mcp>=2.3.0,<3`). It answers MCP

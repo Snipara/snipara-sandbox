@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 3.7.0 - 2026-11-27
 
 - A validation request can leave paths out of the snapshot: `exclude` lists workspace-relative
   files or directories, on top of the fixed exclusions. A workspace over the 64 MB snapshot
